@@ -1,0 +1,1538 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>对公信贷智能化辅助系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+            background: #f5f7fa;
+            color: #333;
+            min-height: 100vh;
+        }
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #1a5276 0%, #2980b9 100%);
+            color: white;
+            padding: 20px 40px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .status-badge {
+            background: rgba(255,255,255,0.2);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-badge.idle { background: #95a5a6; }
+        .status-badge.parsing { background: #3498db; }
+        .status-badge.analyzing { background: #9b59b6; }
+        .status-badge.verifying { background: #f39c12; }
+        .status-badge.generating { background: #e67e22; }
+        .status-badge.done { background: #27ae60; }
+        .status-badge.error { background: #e74c3c; }
+
+        /* Main Layout */
+        .main-container {
+            display: flex;
+            gap: 24px;
+            padding: 24px 40px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        /* Left Panel - Document List */
+        .panel-left {
+            flex: 1;
+            min-width: 0;
+        }
+        .panel-right {
+            width: 420px;
+            flex-shrink: 0;
+        }
+        .panel {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+        .panel:last-child {
+            margin-bottom: 0;
+        }
+        .panel-header {
+            background: #f8f9fa;
+            padding: 16px 20px;
+            border-bottom: 1px solid #eee;
+            font-weight: 600;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .panel-body {
+            padding: 20px;
+        }
+        /* Category Section */
+        .category {
+            margin-bottom: 20px;
+        }
+        .category-title {
+            font-weight: 600;
+            font-size: 14px;
+            color: #1a5276;
+            padding: 10px 12px;
+            background: #eaf2f8;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+        .category-title .progress {
+            font-size: 12px;
+            color: #666;
+            font-weight: normal;
+        }
+        .category-title .toggle-icon {
+            transition: transform 0.3s;
+        }
+        .category-title.collapsed .toggle-icon {
+            transform: rotate(-90deg);
+        }
+        .category-content {
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+        .category-content.collapsed {
+            max-height: 0 !important;
+        }
+        /* Document Item */
+        .doc-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            background: #fafbfc;
+            border: 1px solid #eee;
+            transition: all 0.2s;
+        }
+        .doc-item:hover {
+            border-color: #2980b9;
+            background: #f0f7ff;
+        }
+        .doc-item.uploaded {
+            border-color: #27ae60;
+            background: #f0faf4;
+        }
+        .doc-item .checkbox {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            margin-right: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .doc-item .checkbox.checked {
+            background: #27ae60;
+            border-color: #27ae60;
+            color: white;
+        }
+        .doc-item .checkbox .check-icon {
+            display: none;
+        }
+        .doc-item .checkbox.checked .check-icon {
+            display: block;
+        }
+        .doc-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .doc-name {
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .doc-hint {
+            font-size: 12px;
+            color: #888;
+            margin-top: 2px;
+        }
+        .doc-badge {
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+            flex-shrink: 0;
+        }
+        .doc-badge.required {
+            background: #fee;
+            color: #c0392b;
+        }
+        .doc-badge.suggested {
+            background: #fff3e0;
+            color: #e65100;
+        }
+        .doc-badge.if-exists {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .upload-btn {
+            padding: 6px 12px;
+            background: #2980b9;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .upload-btn:hover {
+            background: #1a5276;
+        }
+        .upload-btn.uploaded-state {
+            background: #27ae60;
+        }
+        /* Upload Area */
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 12px;
+            padding: 40px 20px;
+            text-align: center;
+            transition: all 0.3s;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        .upload-area:hover, .upload-area.dragover {
+            border-color: #2980b9;
+            background: #f0f7ff;
+        }
+        .upload-area input[type="file"] {
+            display: none;
+        }
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+        .upload-text {
+            font-size: 14px;
+            color: #666;
+        }
+        .upload-text strong {
+            color: #2980b9;
+        }
+        /* File List */
+        .file-list {
+            margin-bottom: 20px;
+        }
+        .file-list-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .file-list-title {
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .file-count {
+            font-size: 12px;
+            color: #666;
+            background: #f0f0f0;
+            padding: 4px 10px;
+            border-radius: 12px;
+        }
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            border: 1px solid #eee;
+        }
+        .file-item .file-icon {
+            font-size: 20px;
+            margin-right: 10px;
+        }
+        .file-item .file-name {
+            flex: 1;
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .file-item .file-size {
+            font-size: 12px;
+            color: #888;
+            margin: 0 12px;
+        }
+        .file-item .file-route {
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            margin-right: 8px;
+        }
+        .file-item .file-route.pandas {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .file-item .file-route.mineru {
+            background: #e3f2fd;
+            color: #1565c0;
+        }
+        .file-item .delete-btn {
+            width: 28px;
+            height: 28px;
+            border: none;
+            background: #ffebee;
+            color: #c0392b;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        .file-item .delete-btn:hover {
+            background: #c0392b;
+            color: white;
+        }
+        /* Progress Section */
+        .progress-section {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        .progress-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .progress-item:last-child {
+            margin-bottom: 0;
+        }
+        .progress-label {
+            font-size: 14px;
+        }
+        .progress-value {
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #27ae60, #2ecc71);
+            border-radius: 4px;
+            transition: width 0.3s;
+        }
+        .progress-bar-fill.incomplete {
+            background: linear-gradient(90deg, #e74c3c, #c0392b);
+        }
+        /* Action Buttons */
+        .action-btn {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 12px;
+        }
+        .action-btn.primary {
+            background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
+            color: white;
+        }
+        .action-btn.primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(39, 174, 96, 0.4);
+        }
+        .action-btn.primary:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .action-btn.secondary {
+            background: white;
+            color: #666;
+            border: 1px solid #ddd;
+        }
+        .action-btn.secondary:hover {
+            background: #f5f5f5;
+        }
+        .action-btn.warning {
+            background: linear-gradient(135deg, #e67e22 0%, #f39c12 100%);
+            color: white;
+        }
+        /* Status Messages */
+        .status-message {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            display: none;
+        }
+        .status-message.error {
+            background: #ffebee;
+            color: #c0392b;
+            display: block;
+        }
+        .status-message.success {
+            background: #e8f5e9;
+            color: #2e7d32;
+            display: block;
+        }
+        .status-message.warning {
+            background: #fff3e0;
+            color: #e65100;
+            display: block;
+        }
+        .status-message.info {
+            background: #e3f2fd;
+            color: #1565c0;
+            display: block;
+        }
+        /* Hidden input for file selection per doc */
+        .hidden-input {
+            display: none;
+        }
+        /* Loading Spinner */
+        .spinner {
+            display: none;
+            text-align: center;
+            padding: 40px 20px;
+        }
+        .spinner.active {
+            display: block;
+        }
+        .spinner-icon {
+            font-size: 48px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .spinner-text {
+            margin-top: 16px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        /* ========== Phase 2 Results Section ========== */
+        .phase2-section {
+            margin-top: 24px;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1a5276;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        /* Financial Table */
+        .financial-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .financial-table th {
+            background: #f8f9fa;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid #eee;
+        }
+        .financial-table td {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+        }
+        .financial-table tr:hover {
+            background: #fafbfc;
+        }
+        .financial-table .ai-value {
+            color: #2980b9;
+            font-weight: 500;
+        }
+        .financial-table input[type="text"] {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .financial-table input[type="text"]:focus {
+            outline: none;
+            border-color: #2980b9;
+        }
+        .table-hint {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 12px;
+        }
+        /* Compliance Cards */
+        .compliance-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .compliance-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+        }
+        .compliance-card .label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 8px;
+        }
+        .compliance-card .value {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .compliance-card .value.pass { color: #27ae60; }
+        .compliance-card .value.warning { color: #f39c12; }
+        .compliance-card .value.fail { color: #e74c3c; }
+        .compliance-card .icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        /* Tech Features */
+        .tech-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .tech-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+        }
+        .tech-card .label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 8px;
+        }
+        .tech-card .value {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1a5276;
+        }
+        .tech-card .icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        /* Action Buttons Row */
+        .btn-row {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .btn-row .action-btn {
+            flex: 1;
+            margin-bottom: 0;
+        }
+
+        /* ========== Done Section ========== */
+        .done-section {
+            text-align: center;
+            padding: 40px 20px;
+        }
+        .done-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+        .done-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #27ae60;
+            margin-bottom: 8px;
+        }
+        .done-subtitle {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 24px;
+        }
+        .download-btn {
+            display: inline-block;
+            padding: 14px 32px;
+            background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s;
+        }
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(39, 174, 96, 0.4);
+        }
+
+        /* ========== Error Section ========== */
+        .error-section {
+            text-align: center;
+            padding: 40px 20px;
+        }
+        .error-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+        .error-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #e74c3c;
+            margin-bottom: 8px;
+        }
+        .error-message {
+            font-size: 14px;
+            color: #666;
+            background: #ffebee;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 24px;
+        }
+
+        /* Expandable Details */
+        .expandable {
+            margin-top: 16px;
+        }
+        .expandable-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .expandable-header:hover {
+            background: #eee;
+        }
+        .expandable-content {
+            display: none;
+            padding: 16px;
+            background: #fafbfc;
+            border-radius: 8px;
+            margin-top: 8px;
+        }
+        .expandable.open .expandable-content {
+            display: block;
+        }
+        .expandable.open .expandable-header .toggle-icon {
+            transform: rotate(90deg);
+        }
+        pre {
+            background: #f5f5f5;
+            padding: 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .tech-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+        @media (max-width: 900px) {
+            .main-container {
+                flex-direction: column;
+                padding: 16px;
+            }
+            .panel-right {
+                width: 100%;
+            }
+            .compliance-grid {
+                grid-template-columns: 1fr;
+            }
+            .tech-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>🏦 对公信贷智能化辅助系统</h1>
+        <div class="header-right">
+            <div class="status-badge idle" id="statusBadge">
+                <span class="status-dot"></span>
+                <span id="statusText">⏳ 等待上传资料</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ========== Main Content ========== -->
+    <div class="main-container" id="mainContent">
+        <!-- Left Panel: Document List -->
+        <div class="panel-left">
+            <div class="panel">
+                <div class="panel-header">
+                    📋 资料清单
+                </div>
+                <div class="panel-body" id="documentList">
+                    <!-- Categories will be rendered by JS -->
+                </div>
+            </div>
+
+            <!-- Phase 2 Results Section (hidden by default) -->
+            <div class="panel phase2-section" id="phase2Section" style="display: none;">
+                <div class="panel-header">
+                    📊 Phase 2 分析结果 — 请核对以下数据
+                </div>
+                <div class="panel-body">
+                    <!-- Financial Metrics Table -->
+                    <div class="section-title">📈 财务指标（AI提取值，仅供核对）</div>
+                    <div class="table-hint">💡 如 AI 提取值有误，请在「人工修正值」列填入正确数值</div>
+                    <table class="financial-table" id="financialTable">
+                        <thead>
+                            <tr>
+                                <th style="width: 30%;">指标名称</th>
+                                <th style="width: 35%;">AI提取值</th>
+                                <th style="width: 35%;">人工修正值</th>
+                            </tr>
+                        </thead>
+                        <tbody id="financialTableBody">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+
+                    <!-- Compliance Check -->
+                    <div class="section-title">⚖️ 合规筛查结论</div>
+                    <div class="compliance-grid" id="complianceGrid">
+                        <div class="compliance-card">
+                            <div class="icon">🏢</div>
+                            <div class="label">企业维度</div>
+                            <div class="value pass" id="enterpriseStatus">PASS</div>
+                        </div>
+                        <div class="compliance-card">
+                            <div class="icon">👤</div>
+                            <div class="label">个人维度</div>
+                            <div class="value warning" id="personalStatus">WARNING</div>
+                        </div>
+                        <div class="compliance-card">
+                            <div class="icon">🛡️</div>
+                            <div class="label">综合风险</div>
+                            <div class="value warning" id="overallRisk">⚠️ WARNING</div>
+                        </div>
+                    </div>
+
+                    <!-- Compliance Details Expandable -->
+                    <div class="expandable" id="complianceExpandable">
+                        <div class="expandable-header" onclick="toggleExpandable('complianceExpandable')">
+                            🔍 查看详细合规筛查结果
+                            <span class="toggle-icon">▶</span>
+                        </div>
+                        <div class="expandable-content">
+                            <pre id="complianceDetails">{"enterprise_check": {...}, "personal_check": {...}}</pre>
+                        </div>
+                    </div>
+
+                    <!-- Tech Features -->
+                    <div class="section-title" style="margin-top: 24px;">🔬 科技型中小企业特征</div>
+                    <div class="tech-grid" id="techGrid">
+                        <div class="tech-card">
+                            <div class="icon">💰</div>
+                            <div class="label">研发费用占比</div>
+                            <div class="value" id="rdRatio">5.2%</div>
+                        </div>
+                        <div class="tech-card">
+                            <div class="icon">📜</div>
+                            <div class="label">高新企业证书</div>
+                            <div class="value" id="certStatus">✅ 有效</div>
+                        </div>
+                        <div class="tech-card">
+                            <div class="icon">💡</div>
+                            <div class="label">核心专利数量</div>
+                            <div class="value" id="patentCount">12</div>
+                        </div>
+                        <div class="tech-card">
+                            <div class="icon">👥</div>
+                            <div class="label">核心技术团队</div>
+                            <div class="value" id="teamSize">8人</div>
+                        </div>
+                    </div>
+
+                    <!-- Tech Details Expandable -->
+                    <div class="expandable" id="techExpandable">
+                        <div class="expandable-header" onclick="toggleExpandable('techExpandable')">
+                            🔍 查看详细科技特征
+                            <span class="toggle-icon">▶</span>
+                        </div>
+                        <div class="expandable-content">
+                            <pre id="techDetails">{"rd_expense_ratio": {...}, "high_tech_cert": {...}}</pre>
+                        </div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="btn-row">
+                        <button class="action-btn secondary" onclick="resetWorkflow()">
+                            🔄 重新分析
+                        </button>
+                        <button class="action-btn primary" onclick="confirmAndGenerate()">
+                            ✅ 确认数据无误，生成授信报告
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Done Section (hidden by default) -->
+            <div class="panel done-section" id="doneSection" style="display: none;">
+                <div class="done-icon">🎉</div>
+                <div class="done-title">报告生成完成！</div>
+                <div class="done-subtitle">授信审查报告已准备就绪，请点击下载</div>
+                <a href="#" class="download-btn" id="downloadBtn">
+                    📥 下载授信审查报告
+                </a>
+                <div style="margin-top: 24px;">
+                    <button class="action-btn secondary" onclick="resetWorkflow()">
+                        🔄 开始新任务
+                    </button>
+                </div>
+            </div>
+
+            <!-- Error Section (hidden by default) -->
+            <div class="panel error-section" id="errorSection" style="display: none;">
+                <div class="error-icon">❌</div>
+                <div class="error-title">发生错误</div>
+                <div class="error-message" id="errorMessage">
+                    错误信息显示区域
+                </div>
+                <button class="action-btn primary" onclick="resetWorkflow()">
+                    🔄 重新开始
+                </button>
+            </div>
+        </div>
+
+        <!-- Right Panel: Upload & Actions -->
+        <div class="panel-right" id="rightPanel">
+            <div class="panel">
+                <div class="panel-header">
+                    📤 解析操作
+                </div>
+                <div class="panel-body">
+                    <!-- Status Messages -->
+                    <div id="statusMessage" class="status-message"></div>
+
+                    <!-- Progress Section -->
+                    <div class="progress-section">
+                        <div class="progress-item">
+                            <span class="progress-label">必填项进度</span>
+                            <span class="progress-value" id="requiredProgress">0/5</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-bar-fill incomplete" id="requiredBar" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-item" style="margin-top: 12px;">
+                            <span class="progress-label">建议项进度</span>
+                            <span class="progress-value" id="suggestedProgress">0/11</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-bar-fill" id="suggestedBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- Missing Docs Warning -->
+                    <div id="missingDocs" style="display: none; margin-bottom: 16px;">
+                        <strong>⚠️ 缺少以下必填资料：</strong>
+                        <ul id="missingDocsList" style="margin-top: 8px; padding-left: 20px; font-size: 13px; color: #c0392b;"></ul>
+                    </div>
+
+                    <!-- File List -->
+                    <div class="file-list" id="fileListContainer" style="display: none;">
+                        <div class="file-list-header">
+                            <span class="file-list-title">已选文件</span>
+                            <span class="file-count" id="fileCount">0 个文件</span>
+                        </div>
+                        <div id="fileList"></div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <button class="action-btn primary" id="startBtn" disabled onclick="startParsing()">
+                        🚀 开始解析
+                    </button>
+                    <button class="action-btn secondary" onclick="clearAllFiles()">
+                        🗑️ 清空全部
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Parsing Status (hidden by default) -->
+        <div class="panel-right" id="parsingPanel" style="display: none;">
+            <div class="panel">
+                <div class="panel-header">
+                    🔄 解析中
+                </div>
+                <div class="panel-body">
+                    <div class="spinner active" id="parsingSpinner">
+                        <div class="spinner-icon">⏳</div>
+                        <div class="spinner-text">正在通过 MinerU 解析资料，请稍候...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Analyzing Status (hidden by default) -->
+        <div class="panel-right" id="analyzingPanel" style="display: none;">
+            <div class="panel">
+                <div class="panel-header">
+                    📈 分析中
+                </div>
+                <div class="panel-body">
+                    <div class="spinner active">
+                        <div class="spinner-icon">📊</div>
+                        <div class="spinner-text">正在执行财务分析、合规筛查和科技特征提取，请稍候...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Generating Status (hidden by default) -->
+        <div class="panel-right" id="generatingPanel" style="display: none;">
+            <div class="panel">
+                <div class="panel-header">
+                    📝 生成中
+                </div>
+                <div class="panel-body">
+                    <div class="spinner active">
+                        <div class="spinner-icon">📝</div>
+                        <div class="spinner-text">正在调用 Gemini API 生成授信审查报告，请稍候...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Document categories data
+        const DOCUMENT_CATEGORIES = [
+            {
+                category: 'A',
+                icon: '📜',
+                title: '基础资质与法务合规类',
+                documents: [
+                    { code: 'A1', name: '营业执照（正副本）', level: 'required', hint: '最新版，正副本均需', acceptedTypes: ['.pdf', '.jpg', '.jpeg', '.png'] },
+                    { code: 'A2', name: '法定代表人身份证', level: 'required', hint: '正反面复印件', acceptedTypes: ['.pdf', '.jpg', '.jpeg', '.png'] },
+                    { code: 'A3', name: '实际控制人身份证', level: 'suggested', hint: '如有实际控制人则必填', acceptedTypes: ['.pdf', '.jpg', '.jpeg', '.png'] },
+                    { code: 'A4', name: '公司章程', level: 'suggested', hint: '最新版', acceptedTypes: ['.pdf'] },
+                    { code: 'A5', name: '验资报告', level: 'if-exists', hint: '如有则提供', acceptedTypes: ['.pdf'] },
+                    { code: 'A6', name: '股权树状图', level: 'if-exists', hint: '向上穿透至最终实际控制人', acceptedTypes: ['.pdf', '.jpg', '.jpeg', '.png'] }
+                ]
+            },
+            {
+                category: 'B',
+                icon: '💰',
+                title: '财务与税务数据类',
+                documents: [
+                    { code: 'B1', name: '财务报表（近三年+最新一期）', level: 'required', hint: '资产负债表、利润表、现金流量表', acceptedTypes: ['.pdf', '.xlsx', '.xls', '.xlsm'] },
+                    { code: 'B2', name: '银行流水（12个月）', level: 'required', hint: '主要银行账户交易流水', acceptedTypes: ['.pdf', '.xlsx', '.xls', '.xlsm'] },
+                    { code: 'B3', name: '纳税申报表（近一年）', level: 'required', hint: '增值税、企业所得税纳税申报表及完税凭证', acceptedTypes: ['.pdf', '.xlsx', '.xls', '.xlsm'] },
+                    { code: 'B4', name: '现有负债清单', level: 'suggested', hint: '列明所有尚未结清的融资负债及担保条件', acceptedTypes: ['.pdf', '.xlsx', '.xls', '.xlsm'] }
+                ]
+            },
+            {
+                category: 'C',
+                icon: '🏭',
+                title: '经营情况与上下游业务类',
+                documents: [
+                    { code: 'C1', name: '经营场所证明', level: 'suggested', hint: '产权证明或租赁合同+近期租金支付凭证', acceptedTypes: ['.pdf', '.jpg', '.jpeg', '.png'] },
+                    { code: 'C2', name: '上下游交易佐证', level: 'suggested', hint: '前五大供应商/销售商购销数据、合同、发票', acceptedTypes: ['.pdf', '.xlsx', '.xls', '.xlsm'] },
+                    { code: 'C3', name: '进出口单据', level: 'if-exists', hint: '报关单、海关单据', acceptedTypes: ['.pdf'] },
+                    { code: 'C4', name: '在手订单/合同', level: 'suggested', hint: '重大已签署合同及可行性研究报告', acceptedTypes: ['.pdf'] }
+                ]
+            },
+            {
+                category: 'D',
+                icon: '🔬',
+                title: '科技型企业专属补充资料',
+                documents: [
+                    { code: 'D1', name: '高新技术企业证书', level: 'suggested', hint: '科技型企业核心资质', acceptedTypes: ['.pdf', '.jpg', '.jpeg', '.png'] },
+                    { code: 'D2', name: '知识产权/专利清单', level: 'suggested', hint: '核心发明专利、实用新型专利、软件著作权', acceptedTypes: ['.pdf'] },
+                    { code: 'D3', name: '研发费用明细账', level: 'suggested', hint: '近三年研发费用明细或辅助账册', acceptedTypes: ['.pdf', '.xlsx', '.xls', '.xlsm'] },
+                    { code: 'D4', name: '核心技术团队履历', level: 'suggested', hint: '主要管理层人员详细工作履历', acceptedTypes: ['.pdf', '.jpg', '.jpeg', '.png'] }
+                ]
+            }
+        ];
+
+        const EXCEL_EXTENSIONS = ['.xls', '.xlsx', '.xlsm'];
+        const REQUIRED_CODES = ['A1', 'A2', 'B1', 'B2', 'B3'];
+        const CATEGORY_ICONS = { A: '📜', B: '💰', C: '🏭', D: '🔬' };
+
+        // Workflow Status
+        const WORKFLOW_STATUS = {
+            IDLE: 'idle',
+            PARSING: 'parsing',
+            ANALYZING: 'analyzing',
+            VERIFYING: 'verifying',
+            GENERATING: 'generating',
+            DONE: 'done',
+            ERROR: 'error'
+        };
+
+        const STATUS_LABELS = {
+            idle: '⏳ 等待上传资料',
+            parsing: '🔄 正在解析资料',
+            analyzing: '📈 正在执行财务分析与合规筛查',
+            verifying: '✅ 分析完成，请核对结构化数据',
+            generating: '📝 正在生成授信报告',
+            done: '🎉 处理完成',
+            error: '❌ 发生错误'
+        };
+
+        // State
+        let currentStatus = WORKFLOW_STATUS.IDLE;
+        let uploadedFiles = {}; // { code: [{ name, size, file, id }, ...] }
+        let parseFiles = []; // [{ name, size, file, route }]
+        let verifiedFinancialData = null; // User corrected financial data
+        let fileIdCounter = 0; // For generating unique file IDs
+
+        // Sample Phase 2 data for demonstration
+        const SAMPLE_PHASE2_DATA = {
+            financial: {
+                gross_margin: 23.45,
+                net_profit: 1234.56,
+                operating_revenue: 5678.90,
+                current_ratio: 1.85,
+                debt_to_asset_ratio: 55.2,
+                revenue_cagr: 12.3,
+                rd_expense_ratio: 5.2,
+                enterprise_name: '示例科技有限公司'
+            },
+            tech: {
+                rd_expense_ratio: 5.2,
+                high_tech_cert: { valid: true, expiry: '2027-06-30' },
+                patent_count: 12,
+                team_size: 8
+            },
+            compliance: {
+                overall: 'WARNING',
+                enterprise_check: { status: 'PASS', details: {} },
+                personal_check: { status: 'WARNING', details: {} }
+            }
+        };
+
+        // Financial metrics display config
+        const FINANCIAL_METRICS = [
+            { key: 'gross_margin', label: '毛利率(%)' },
+            { key: 'net_profit', label: '净利润(万元)' },
+            { key: 'operating_revenue', label: '营业收入(万元)' },
+            { key: 'current_ratio', label: '流动比率' },
+            { key: 'debt_to_asset_ratio', label: '资产负债率(%)' },
+            { key: 'revenue_cagr', label: '营收CAGR(%)' },
+            { key: 'rd_expense_ratio', label: '研发费用占比(%)' }
+        ];
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            renderDocumentList();
+            setupUploadArea();
+            updateProgress();
+            updateStatus(WORKFLOW_STATUS.IDLE);
+        });
+
+        // Render document list
+        function renderDocumentList() {
+            const container = document.getElementById('documentList');
+            container.innerHTML = DOCUMENT_CATEGORIES.map(cat => `
+                <div class="category">
+                    <div class="category-title" onclick="toggleCategory('${cat.category}')" id="catTitle_${cat.category}">
+                        <span>${CATEGORY_ICONS[cat.category]} 类别${cat.category}：${cat.title}</span>
+                        <span class="progress" id="catProgress_${cat.category}">0/${cat.documents.length}</span>
+                        <span class="toggle-icon">▼</span>
+                    </div>
+                    <div class="category-content" id="catContent_${cat.category}" style="max-height: 2000px;">
+                        ${cat.documents.map(doc => `
+                            <div class="doc-item ${uploadedFiles[doc.code] && uploadedFiles[doc.code].length > 0 ? 'uploaded' : ''}" id="doc_${doc.code}">
+                                <div class="checkbox ${uploadedFiles[doc.code] && uploadedFiles[doc.code].length > 0 ? 'checked' : ''}" onclick="toggleDocUpload('${doc.code}')">
+                                    <span class="check-icon">✓</span>
+                                </div>
+                                <div class="doc-info">
+                                    <div class="doc-name">
+                                        <strong>${doc.code}</strong> ${doc.name}
+                                    </div>
+                                    ${doc.hint ? `<div class="doc-hint">└ ${doc.hint}</div>` : ''}
+                                    ${(uploadedFiles[doc.code] && uploadedFiles[doc.code].length > 0) ? `
+                                        <div class="doc-files" style="margin-top: 6px;">
+                                            ${uploadedFiles[doc.code].map(f => `
+                                                <div class="doc-file-item" style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                                                    <span style="font-size: 12px;">${getFileIcon(f.name)}</span>
+                                                    <span style="font-size: 12px; color: #27ae60; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${f.name}</span>
+                                                    <button class="doc-file-delete" onclick="event.stopPropagation(); removeDocFile('${doc.code}', ${f.id})" style="width: 18px; height: 18px; border: none; background: #ffebee; color: #c0392b; border-radius: 4px; cursor: pointer; font-size: 10px; display: flex; align-items: center; justify-content: center; line-height: 1;">✕</button>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    ` : ''}
+                                </div>
+                                <span class="doc-badge ${doc.level}">${getLevelText(doc.level)}</span>
+                                <input type="file" class="hidden-input" id="input_${doc.code}"
+                                       accept="${doc.acceptedTypes.join(',')}"
+                                       multiple
+                                       onchange="handleDocFileSelect('${doc.code}', this)">
+                                <button class="upload-btn" onclick="document.getElementById('input_${doc.code}').click()">上传</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getLevelText(level) {
+            const map = { required: '必填', suggested: '建议', 'if-exists': '如有则提供' };
+            return map[level] || level;
+        }
+
+        function toggleCategory(cat) {
+            const title = document.getElementById(`catTitle_${cat}`);
+            const content = document.getElementById(`catContent_${cat}`);
+            title.classList.toggle('collapsed');
+            content.classList.toggle('collapsed');
+        }
+
+        // Setup global upload area
+        function setupUploadArea() {
+            const uploadArea = document.getElementById('uploadArea');
+            const fileInput = document.getElementById('fileInput');
+
+            uploadArea.addEventListener('click', () => fileInput.click());
+
+            uploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadArea.classList.add('dragover');
+            });
+
+            uploadArea.addEventListener('dragleave', () => {
+                uploadArea.classList.remove('dragover');
+            });
+
+            uploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+                handleFiles(e.dataTransfer.files);
+            });
+
+            fileInput.addEventListener('change', () => {
+                handleFiles(fileInput.files);
+                fileInput.value = '';
+            });
+        }
+
+        // Handle file selection from global area
+        function handleFiles(files) {
+            for (let file of files) {
+                const ext = '.' + file.name.split('.').pop().toLowerCase();
+                const route = EXCEL_EXTENSIONS.includes(ext) ? 'pandas' : 'mineru';
+
+                // Check if file already exists
+                const exists = parseFiles.some(f => f.name === file.name);
+                if (!exists) {
+                    parseFiles.push({
+                        name: file.name,
+                        size: file.size,
+                        file: file,
+                        route: route
+                    });
+                }
+            }
+            renderFileList();
+            updateProgress();
+        }
+
+        // Handle doc-specific file selection (multiple files)
+        function handleDocFileSelect(code, input) {
+            if (input.files && input.files.length > 0) {
+                if (!uploadedFiles[code]) {
+                    uploadedFiles[code] = [];
+                }
+                for (let file of input.files) {
+                    // Check if file already exists (by name)
+                    const exists = uploadedFiles[code].some(f => f.name === file.name);
+                    if (!exists) {
+                        uploadedFiles[code].push({
+                            id: ++fileIdCounter,
+                            name: file.name,
+                            size: file.size,
+                            file: file
+                        });
+                    }
+                }
+                renderDocumentList();
+                updateProgress();
+            }
+            // Reset input so same file can be selected again
+            input.value = '';
+        }
+
+        // Remove doc file (by id)
+        function removeDocFile(code, fileId) {
+            if (uploadedFiles[code]) {
+                uploadedFiles[code] = uploadedFiles[code].filter(f => f.id !== fileId);
+                if (uploadedFiles[code].length === 0) {
+                    delete uploadedFiles[code];
+                }
+                renderDocumentList();
+                updateProgress();
+            }
+        }
+
+        // Toggle doc upload (click checkbox area)
+        function toggleDocUpload(code) {
+            if (uploadedFiles[code] && uploadedFiles[code].length > 0) {
+                // Has files - trigger file input to add more
+                document.getElementById(`input_${code}`).click();
+            } else {
+                document.getElementById(`input_${code}`).click();
+            }
+        }
+
+        // Render file list
+        function renderFileList() {
+            const container = document.getElementById('fileListContainer');
+            const listEl = document.getElementById('fileList');
+            const countEl = document.getElementById('fileCount');
+
+            if (parseFiles.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            container.style.display = 'block';
+            countEl.textContent = `${parseFiles.length} 个文件`;
+
+            listEl.innerHTML = parseFiles.map((f, index) => `
+                <div class="file-item">
+                    <span class="file-icon">${getFileIcon(f.name)}</span>
+                    <span class="file-name" title="${f.name}">${f.name}</span>
+                    <span class="file-size">${formatSize(f.size)}</span>
+                    <span class="file-route ${f.route}">${f.route === 'pandas' ? '📊 pandas' : '🤖 MinerU'}</span>
+                    <button class="delete-btn" onclick="removeFile(${index})">✕</button>
+                </div>
+            `).join('');
+        }
+
+        function getFileIcon(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            const icons = {
+                pdf: '📄', doc: '📝', docx: '📝', xls: '📊', xlsx: '📊', xlsm: '📊',
+                jpg: '🖼️', jpeg: '🖼️', png: '🖼️', html: '🌐', pptx: '📽️', ppt: '📽️'
+            };
+            return icons[ext] || '📁';
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function removeFile(index) {
+            parseFiles.splice(index, 1);
+            renderFileList();
+            updateProgress();
+        }
+
+        function clearAllFiles() {
+            parseFiles = [];
+            uploadedFiles = {};
+            renderFileList();
+            renderDocumentList();
+            updateProgress();
+            showStatus('', '');
+        }
+
+        // Update progress
+        function updateProgress() {
+            const requiredUploaded = REQUIRED_CODES.filter(code => uploadedFiles[code] && uploadedFiles[code].length > 0).length;
+            const totalRequired = REQUIRED_CODES.length;
+
+            let totalSuggested = 0;
+            let suggestedUploaded = 0;
+            DOCUMENT_CATEGORIES.forEach(cat => {
+                cat.documents.forEach(doc => {
+                    if (doc.level === 'suggested') {
+                        totalSuggested++;
+                        if (uploadedFiles[doc.code] && uploadedFiles[doc.code].length > 0) suggestedUploaded++;
+                    }
+                });
+            });
+
+            document.getElementById('requiredProgress').textContent = `${requiredUploaded}/${totalRequired}`;
+            document.getElementById('suggestedProgress').textContent = `${suggestedUploaded}/${totalSuggested}`;
+
+            const requiredPercent = (requiredUploaded / totalRequired) * 100;
+            const suggestedPercent = (suggestedUploaded / totalSuggested) * 100;
+
+            const requiredBar = document.getElementById('requiredBar');
+            requiredBar.style.width = requiredPercent + '%';
+            requiredBar.classList.toggle('incomplete', requiredUploaded < totalRequired);
+
+            document.getElementById('suggestedBar').style.width = suggestedPercent + '%';
+
+            // Update category progress
+            DOCUMENT_CATEGORIES.forEach(cat => {
+                const uploaded = cat.documents.filter(doc => uploadedFiles[doc.code] && uploadedFiles[doc.code].length > 0).length;
+                const total = cat.documents.length;
+                const el = document.getElementById(`catProgress_${cat.category}`);
+                if (el) el.textContent = `${uploaded}/${total}`;
+            });
+
+            // Update button state
+            const startBtn = document.getElementById('startBtn');
+            const canStart = requiredUploaded === totalRequired && parseFiles.length > 0;
+            startBtn.disabled = !canStart;
+
+            // Update missing docs warning
+            const missingDocs = document.getElementById('missingDocs');
+            const missingList = document.getElementById('missingDocsList');
+            if (requiredUploaded < totalRequired) {
+                missingDocs.style.display = 'block';
+                const missing = REQUIRED_CODES.filter(code => !uploadedFiles[code]);
+                missingList.innerHTML = missing.map(code => {
+                    const doc = DOCUMENT_CATEGORIES.flatMap(c => c.documents).find(d => d.code === code);
+                    return `<li>${code} ${doc ? doc.name : ''}</li>`;
+                }).join('');
+            } else {
+                missingDocs.style.display = 'none';
+            }
+
+            if (parseFiles.length === 0) {
+                showStatus('请先上传待解析文件', 'warning');
+            } else if (requiredUploaded < totalRequired) {
+                showStatus(`请先上传所有必填资料（还差 ${totalRequired - requiredUploaded} 项）`, 'warning');
+            } else {
+                showStatus('✅ 所有必填资料已上传，可以开始解析', 'success');
+            }
+        }
+
+        function showStatus(message, type) {
+            const el = document.getElementById('statusMessage');
+            el.textContent = message;
+            el.className = 'status-message ' + type;
+            el.style.display = message ? 'block' : 'none';
+        }
+
+        // ========== Workflow Status Management ==========
+        function updateStatus(status) {
+            currentStatus = status;
+
+            // Update status badge
+            const badge = document.getElementById('statusBadge');
+            badge.className = 'status-badge ' + status;
+            document.getElementById('statusText').textContent = STATUS_LABELS[status];
+
+            // Show/hide panels based on status
+            const rightPanel = document.getElementById('rightPanel');
+            const parsingPanel = document.getElementById('parsingPanel');
+            const analyzingPanel = document.getElementById('analyzingPanel');
+            const generatingPanel = document.getElementById('generatingPanel');
+            const phase2Section = document.getElementById('phase2Section');
+            const doneSection = document.getElementById('doneSection');
+            const errorSection = document.getElementById('errorSection');
+
+            // Hide all panels first
+            rightPanel.style.display = 'none';
+            parsingPanel.style.display = 'none';
+            analyzingPanel.style.display = 'none';
+            generatingPanel.style.display = 'none';
+            phase2Section.style.display = 'none';
+            doneSection.style.display = 'none';
+            errorSection.style.display = 'none';
+
+            // Show appropriate panel
+            switch(status) {
+                case WORKFLOW_STATUS.IDLE:
+                    rightPanel.style.display = 'block';
+                    break;
+                case WORKFLOW_STATUS.PARSING:
+                    parsingPanel.style.display = 'block';
+                    break;
+                case WORKFLOW_STATUS.ANALYZING:
+                    analyzingPanel.style.display = 'block';
+                    break;
+                case WORKFLOW_STATUS.VERIFYING:
+                    rightPanel.style.display = 'block';
+                    phase2Section.style.display = 'block';
+                    populatePhase2Results();
+                    break;
+                case WORKFLOW_STATUS.GENERATING:
+                    generatingPanel.style.display = 'block';
+                    break;
+                case WORKFLOW_STATUS.DONE:
+                    rightPanel.style.display = 'block';
+                    doneSection.style.display = 'block';
+                    break;
+                case WORKFLOW_STATUS.ERROR:
+                    rightPanel.style.display = 'block';
+                    errorSection.style.display = 'block';
+                    break;
+            }
+        }
+
+        // Populate Phase 2 results
+        function populatePhase2Results() {
+            const data = SAMPLE_PHASE2_DATA;
+
+            // Populate financial table
+            const tbody = document.getElementById('financialTableBody');
+            tbody.innerHTML = FINANCIAL_METRICS.map(metric => `
+                <tr>
+                    <td>${metric.label}</td>
+                    <td class="ai-value">${typeof data.financial[metric.key] === 'number'
+                        ? data.financial[metric.key].toFixed(2)
+                        : (data.financial[metric.key] || '-')}</td>
+                    <td><input type="text" placeholder="修正值（选填）" data-key="${metric.key}"></td>
+                </tr>
+            `).join('');
+
+            // Populate compliance
+            document.getElementById('enterpriseStatus').textContent = data.compliance.enterprise_check.status;
+            document.getElementById('enterpriseStatus').className = 'value ' + data.compliance.enterprise_check.status.toLowerCase();
+
+            document.getElementById('personalStatus').textContent = data.compliance.personal_check.status;
+            document.getElementById('personalStatus').className = 'value ' + data.compliance.personal_check.status.toLowerCase();
+
+            const overallEl = document.getElementById('overallRisk');
+            const overallIcons = { PASS: '✅', WARNING: '⚠️', FAIL: '❌' };
+            overallEl.textContent = `${overallIcons[data.compliance.overall] || ''} ${data.compliance.overall}`;
+            overallEl.className = 'value ' + data.compliance.overall.toLowerCase();
+
+            document.getElementById('complianceDetails').textContent = JSON.stringify(data.compliance, null, 2);
+
+            // Populate tech features
+            document.getElementById('rdRatio').textContent = data.tech.rd_expense_ratio + '%';
+            document.getElementById('certStatus').textContent = data.tech.high_tech_cert.valid ? '✅ 有效' : '❌ 无效';
+            document.getElementById('patentCount').textContent = data.tech.patent_count;
+            document.getElementById('teamSize').textContent = data.tech.team_size + '人';
+
+            document.getElementById('techDetails').textContent = JSON.stringify(data.tech, null, 2);
+        }
+
+        // Toggle expandable sections
+        function toggleExpandable(id) {
+            const el = document.getElementById(id);
+            el.classList.toggle('open');
+        }
+
+        // ========== Workflow Actions ==========
+        async function startParsing() {
+            updateStatus(WORKFLOW_STATUS.PARSING);
+
+            try {
+                // Prepare form data
+                const formData = new FormData();
+
+                // Add doc files
+                Object.keys(uploadedFiles).forEach(code => {
+                    formData.append(`doc_${code}`, uploadedFiles[code].file, uploadedFiles[code].name);
+                });
+
+                // Add parse files
+                parseFiles.forEach((f, index) => {
+                    formData.append(`parse_file_${index}`, f.file, f.name);
+                });
+
+                // Simulate parsing delay
+                await new Promise(resolve => setTimeout(resolve, 2000));
+
+                // Move to analyzing
+                updateStatus(WORKFLOW_STATUS.ANALYZING);
+                await new Promise(resolve => setTimeout(resolve, 2000));
+
+                // Move to verifying (show results)
+                updateStatus(WORKFLOW_STATUS.VERIFYING);
+
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('errorMessage').textContent = error.message;
+                updateStatus(WORKFLOW_STATUS.ERROR);
+            }
+        }
+
+        function confirmAndGenerate() {
+            // Collect user-corrected values
+            const correctedData = {};
+            document.querySelectorAll('#financialTableBody input').forEach(input => {
+                const key = input.dataset.key;
+                if (input.value.trim()) {
+                    correctedData[key] = parseFloat(input.value);
+                }
+            });
+            verifiedFinancialData = correctedData;
+
+            updateStatus(WORKFLOW_STATUS.GENERATING);
+
+            // Simulate report generation
+            setTimeout(() => {
+                updateStatus(WORKFLOW_STATUS.DONE);
+            }, 3000);
+        }
+
+        function resetWorkflow() {
+            currentStatus = WORKFLOW_STATUS.IDLE;
+            uploadedFiles = {};
+            parseFiles = [];
+            verifiedFinancialData = null;
+
+            renderFileList();
+            renderDocumentList();
+            updateProgress();
+            updateStatus(WORKFLOW_STATUS.IDLE);
+        }
+
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            updateStatus(WORKFLOW_STATUS.ERROR);
+        }
+    </script>
+</body>
+</html>
