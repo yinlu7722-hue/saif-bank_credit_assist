@@ -27,7 +27,7 @@ from shared.mineru_client import clean_mineru_markdown
 from phase1_parser import phase1_parse_documents, parse_excel_locally
 from phase2_analysis import run_financial_analysis, extract_tech_innovation_metrics
 from phase2_compliance import ComplianceScreener
-from phase3_gemini import generate_report, FinalReport
+from phase3_report import generate_report, FinalReport
 
 
 # ============================================================================

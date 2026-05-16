@@ -19,7 +19,17 @@ Desktop.ini
 
 # Project-specific
 bank_credit_assist/temp/
+bank_credit_assist/output/
+temp/
+output/
 *.pyc
+
+# Test files (contain real enterprise data)
+testfile/
+testfile-gemini/
+
+# Large binary files
+*.docx
 
 # Claude
 .claude/

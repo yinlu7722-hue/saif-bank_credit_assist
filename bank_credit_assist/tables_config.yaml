@@ -1,0 +1,284 @@
+# ============================================================================
+# tables_config.yaml — 报告表格定义（YAML 配置驱动 + Pandas 引擎）
+# ============================================================================
+# 数据源类型:
+#   phase2_flat      - 扁平 dict → 转置为键值对表
+#   phase2_list      - list[dict] → DataFrame
+#   phase1_markdown  - Markdown → pd.read_html()
+#   phase25_text     - AI 叙事文本（不生成表格，占位符填充）
+#   static_fallback  - 无数据源 → 空表头 + 【待人工补充】
+# ============================================================================
+
+tables:
+
+  # ==========================================================================
+  # 第一章：申请人基本信息
+  # ==========================================================================
+
+  enterprise_basic_info:
+    caption: "表：申请人基本情况"
+    chapter: "一、申请人基本信息"
+    source: phase2_flat
+    source_key: basic_info
+    style: key_value          # 键值对表（项目 | 内容）
+    row_labels:
+      company_name: "企业名称"
+      unified_social_credit_code: "统一社会信用代码"
+      legal_representative: "法定代表人"
+      registered_capital: "注册资本（万元）"
+      registration_date: "注册日期"
+      business_scope: "经营范围"
+      main_products: "主营业务产品"
+      actual_controller: "实际控制人"
+    columns:
+      - {key: field, label: 项目, width: 25}
+      - {key: value, label: 内容, width: 75}
+    fallback: "【待人工补充：企业基本信息】"
+
+  shareholder_structure:
+    caption: "表：最新股权结构情况"
+    chapter: "一、申请人基本信息"
+    source: phase2_list
+    source_key: shareholder_structure
+    style: data_table
+    columns:
+      - {key: name, label: 股东名称, width: 18}
+      - {key: amount, label: "出资额（万元）", width: 14, format: ".0f"}
+      - {key: ratio, label: "出资比例（%）", width: 12, format: ".1f"}
+      - {key: method, label: 出资方式, width: 14}
+      - {key: relation, label: 关联关系, width: 22}
+      - {key: remark, label: 备注, width: 20}
+    fallback: "【待人工补充：股权结构】"
+
+  # ==========================================================================
+  # 第二章：申请人经营情况
+  # ==========================================================================
+
+  business_qualifications:
+    caption: "表：企业经营资质及许可"
+    chapter: "二、申请人经营情况"
+    source: phase2_flat
+    source_key: tech_metrics
+    style: key_value
+    row_labels:
+      high_tech_certificate: "高新技术企业证书"
+    extra_rows:
+      - "其他经营资质"
+      - "环保批文/安全生产许可证"
+      - "特许经营权/收费权"
+    columns:
+      - {key: field, label: 资质名称, width: 30}
+      - {key: value, label: 证号/有效期, width: 70}
+    fallback: "【待人工补充：经营资质】"
+
+  capacity_output:
+    caption: "表：近三年及一期产能、产量及收入情况"
+    chapter: "二、申请人经营情况"
+    source: static_fallback
+    source_key: null
+    style: data_table
+    columns:
+      - {key: product, label: 产品名称, width: 15}
+      - {key: capacity, label: 产能, width: 12}
+      - {key: output, label: 产量, width: 10}
+      - {key: utilization, label: "产能利用率（%）", width: 12}
+      - {key: sales_volume, label: 销量, width: 10}
+      - {key: sales_rate, label: "产销率（%）", width: 10}
+      - {key: revenue, label: "收入（万元）", width: 12}
+      - {key: cost, label: "成本（万元）", width: 12}
+      - {key: unit_price, label: "均价（元）", width: 10}
+      - {key: remark, label: 备注, width: 7}
+    fallback: "【待人工补充：产能产量数据】"
+
+  gross_margin_product:
+    caption: "表：近三年及一期营业毛利率情况（分产品）"
+    chapter: "二、申请人经营情况"
+    source: static_fallback
+    source_key: null
+    style: data_table
+    columns:
+      - {key: product, label: 产品名称, width: 18}
+      - {key: revenue_n1, label: "第N-2年收入", width: 13}
+      - {key: cost_n1, label: "第N-2年成本", width: 13}
+      - {key: margin_n1, label: "第N-2年毛利率", width: 13}
+      - {key: revenue_n, label: "第N-1年收入", width: 13}
+      - {key: cost_n, label: "第N-1年成本", width: 13}
+      - {key: margin_n, label: "第N-1年毛利率", width: 13}
+      - {key: revenue_curr, label: "本期收入", width: 14}
+      - {key: cost_curr, label: "本期成本", width: 14}
+      - {key: margin_curr, label: "本期毛利率", width: 14}
+    fallback: "【待人工补充：分产品毛利率数据，此项为必填】"
+
+  gross_margin_summary:
+    caption: "表：近三年及一期营业毛利率汇总（%）"
+    chapter: "二、申请人经营情况"
+    source: phase2_flat
+    source_key: financial
+    style: data_table
+    columns:
+      - {key: product, label: 产品, width: 25}
+      - {key: year_n2, label: "第N-2年", width: 18, format: ".1f"}
+      - {key: year_n1, label: "第N-1年", width: 18, format: ".1f"}
+      - {key: year_n, label: 本期, width: 18, format: ".1f"}
+      - {key: trend, label: 变动趋势, width: 21}
+    fallback: "【待人工补充：毛利率汇总】"
+
+  upstream_suppliers:
+    caption: "表：前五大供应商情况"
+    chapter: "二、申请人经营情况"
+    source: phase2_list
+    source_key: upstream_suppliers
+    style: data_table
+    columns:
+      - {key: name, label: 供应商名称, width: 16}
+      - {key: amount, label: "采购金额（万元）", width: 14, format: ".0f"}
+      - {key: ratio, label: "占比（%）", width: 10, format: ".1f"}
+      - {key: product, label: 采购产品, width: 14}
+      - {key: years, label: 合作年限, width: 10}
+      - {key: payment, label: 结算方式, width: 12}
+      - {key: relation, label: 关联关系, width: 14}
+      - {key: remark, label: 备注, width: 10}
+    fallback: "【待人工补充：前五大供应商】"
+
+  downstream_customers:
+    caption: "表：前五大销售商情况"
+    chapter: "二、申请人经营情况"
+    source: phase2_list
+    source_key: downstream_customers
+    style: data_table
+    columns:
+      - {key: name, label: 销售商名称, width: 16}
+      - {key: amount, label: "销售金额（万元）", width: 14, format: ".0f"}
+      - {key: ratio, label: "占比（%）", width: 10, format: ".1f"}
+      - {key: product, label: 销售产品, width: 14}
+      - {key: years, label: 合作年限, width: 10}
+      - {key: payment, label: 结算方式, width: 12}
+      - {key: relation, label: 关联关系, width: 14}
+      - {key: remark, label: 备注, width: 10}
+    fallback: "【待人工补充：前五大销售商】"
+
+  # ==========================================================================
+  # 第三章：申请人财务状况
+  # ==========================================================================
+
+  balance_sheet:
+    caption: "表：资产负债表（单位：万元）"
+    chapter: "三、申请人财务状况"
+    source: phase1_markdown
+    source_key: markdown_content
+    table_index: 0
+    style: wide_table
+    columns: []           # 列由 pd.read_html() 自动识别
+    fallback: "【待人工补充：资产负债表】（MinerU 未识别到报表表格，请手动粘贴）"
+
+  income_statement:
+    caption: "表：利润表（单位：万元）"
+    chapter: "三、申请人财务状况"
+    source: phase1_markdown
+    source_key: markdown_content
+    table_index: 1
+    style: wide_table
+    columns: []
+    fallback: "【待人工补充：利润表】（MinerU 未识别到报表表格，请手动粘贴）"
+
+  cash_flow_statement:
+    caption: "表：现金流量表（单位：万元）"
+    chapter: "三、申请人财务状况"
+    source: phase1_markdown
+    source_key: markdown_content
+    table_index: 2
+    style: wide_table
+    columns: []
+    fallback: "【待人工补充：现金流量表】（MinerU 未识别到报表表格，请手动粘贴）"
+
+  financial_metrics_summary:
+    caption: "表：财务指标汇总"
+    chapter: "三、申请人财务状况"
+    source: phase2_flat
+    source_key: computed_ratios
+    style: key_value
+    row_labels:
+      gross_margin_calc: "毛利率（%）"
+      net_margin: "净利率（%）"
+      current_ratio_calc: "流动比率"
+      quick_ratio: "速动比率"
+      debt_to_asset_ratio_calc: "资产负债率（%）"
+      debt_to_equity_ratio: "产权比率"
+      equity_multiplier: "权益乘数"
+      asset_turnover: "资产周转率（次）"
+      revenue_cagr: "营业收入CAGR（%）"
+      net_profit_cagr: "净利润CAGR（%）"
+      rd_expense_ratio: "研发费用占比（%）"
+    columns:
+      - {key: field, label: 指标, width: 30}
+      - {key: value, label: 数值, width: 30, format: ".2f"}
+      - {key: benchmark, label: 行业参考值, width: 20}
+      - {key: assessment, label: 评价, width: 20}
+    fallback: "【待人工补充：财务指标汇总】"
+
+  # ==========================================================================
+  # 第四章：申请人信用状况
+  # ==========================================================================
+
+  bank_credit_details:
+    caption: "表：银行授信情况一览表"
+    chapter: "四、申请人信用状况"
+    source: static_fallback
+    source_key: null
+    style: data_table
+    columns:
+      - {key: bank, label: 贷款机构, width: 15}
+      - {key: credit_amount, label: "授信金额（万元）", width: 14}
+      - {key: used_amount, label: "已提金额（万元）", width: 14}
+      - {key: rate, label: "利率（%）", width: 10}
+      - {key: term, label: 期限, width: 10}
+      - {key: guarantee, label: 担保方式, width: 14}
+      - {key: status, label: 状态, width: 10}
+      - {key: remark, label: 备注, width: 13}
+    fallback: "【待人工补充：银行授信情况（需上传现有债务清单 + 征信查询授权书）】"
+
+  external_guarantees:
+    caption: "表：对外担保情况一览表"
+    chapter: "四、申请人信用状况"
+    source: static_fallback
+    source_key: null
+    style: data_table
+    columns:
+      - {key: guarantor, label: 担保人名称, width: 25}
+      - {key: beneficiary, label: 被担保方, width: 25}
+      - {key: amount, label: "担保金额（万元）", width: 20}
+      - {key: term, label: 担保期限, width: 30}
+    fallback: "【待人工补充：对外担保情况】"
+
+  # ==========================================================================
+  # 第六章：其他重要事项
+  # ==========================================================================
+
+  litigation_events:
+    caption: "表：重大诉讼及负面信息一览表"
+    chapter: "六、其他重要事项"
+    source: phase2_list
+    source_key: litigation_events
+    style: data_table
+    columns:
+      - {key: category, label: 事件类别, width: 12}
+      - {key: description, label: 事件描述, width: 28}
+      - {key: amount, label: "涉及金额（万元）", width: 14}
+      - {key: date, label: 发生时间, width: 12}
+      - {key: impact, label: 影响评估, width: 22}
+      - {key: status, label: 当前状态, width: 12}
+    fallback: "【待人工补充：重大诉讼及负面信息】"
+
+# ============================================================================
+# 已删除表格清单（供模板编辑时参考）
+# ============================================================================
+# 表格2  管理层信息表        → 替换为 {{actual_controller}} + {{management_team_summary}}
+# 表格3  子公司和关联企业表   → 删除
+# 表格4  管理层履历表         → 替换为 {{management_team_summary}}
+# 表格5  上市公司信息表       → 删除
+# 表格13 在手订单表           → 替换为 {{current_orders_summary}}
+# 表格19 债券融资表           → 删除
+# 表格20 非标融资表           → 删除
+# 表格22 征信查询记录表       → 删除
+# 表格23 关联方征信表         → 删除
+# ============================================================================

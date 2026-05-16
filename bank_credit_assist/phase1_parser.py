@@ -12,6 +12,7 @@ import pandas as pd
 from pathlib import Path
 from typing import TypedDict
 
+from shared.utils import safe_print as _safe_print
 from shared.mineru_client import (
     extract_batch_cloud,
     FileProcessingState,
@@ -37,25 +38,28 @@ class Phase1Result(TypedDict):
 
 
 async def print_progress(fp: FileProgress) -> None:
-    """实时打印各文件解析进度"""
+    """实时打印各文件解析进度（避免 emoji 以兼容 Windows GBK 终端）"""
     bar_length: int = 30
     filled: int = int(fp.progress_percent / 100 * bar_length)
-    bar: str = "█" * filled + "░" * (bar_length - filled)
+    bar: str = "=" * filled + "-" * (bar_length - filled)
 
-    state_emoji: str = {
-        FileProcessingState.PENDING: "⏳",
-        FileProcessingState.UPLOADING: "⬆️",
-        FileProcessingState.PROCESSING: "🔄",
-        FileProcessingState.DONE: "✅",
-        FileProcessingState.FAILED: "❌",
-    }.get(fp.state, "❓")
+    state_indicator: str = {
+        FileProcessingState.PENDING: "[PEND]",
+        FileProcessingState.UPLOADING: "[UP  ]",
+        FileProcessingState.PROCESSING: "[PROC]",
+        FileProcessingState.DONE: "[DONE]",
+        FileProcessingState.FAILED: "[FAIL]",
+    }.get(fp.state, "[????]")
 
-    print(f"\r{state_emoji} [{bar}] {fp.progress_percent:3d}% | {fp.filename}", end="", flush=True)
+    try:
+        _safe_print(f"\r{state_indicator} [{bar}] {fp.progress_percent:3d}% | {fp.filename}")
+    except UnicodeEncodeError:
+        pass  # Windows GBK 终端无法打印某些字符，静默忽略
 
     if fp.state == FileProcessingState.DONE:
-        print()  # 换行
+        _safe_print("")  # 换行
     elif fp.state == FileProcessingState.FAILED:
-        print(f"   └─ 错误: {fp.error_message}")
+        _safe_print(f"   ERR: {fp.error_message}")
 
 
 async def parse_excel_locally(excel_path: Path) -> str:
@@ -112,13 +116,13 @@ async def phase1_parse_documents(
     for excel_file in excel_files:
         md_content = await parse_excel_locally(excel_file)
         results[excel_file.name] = md_content
-        print(f"[Excel本地解析] {excel_file.name} → {len(md_content)} 字")
+        _safe_print(f"[Excel本地解析] {excel_file.name} -> {len(md_content)} char")
 
     # 2. 其他文件：MinerU 批量解析
     if mineru_files:
-        print(f"\n{'='*60}")
-        print(f"开始通过 MinerU 解析 {len(mineru_files)} 个文件...")
-        print(f"{'='*60}\n")
+        _safe_print(f"\n{'='*60}")
+        _safe_print(f"开始通过 MinerU 解析 {len(mineru_files)} 个文件...")
+        _safe_print(f"{'='*60}\n")
 
         mineru_results = await extract_batch_cloud(
             mineru_files,
@@ -132,9 +136,9 @@ async def phase1_parse_documents(
         if not content  # 空内容视为失败
     ]
 
-    print(f"\n{'='*60}")
-    print(f"解析完成！成功: {len(results) - len(failed_files)}, 失败: {len(failed_files)}")
-    print(f"{'='*60}\n")
+    _safe_print(f"\n{'='*60}")
+    _safe_print(f"解析完成！成功: {len(results) - len(failed_files)}, 失败: {len(failed_files)}")
+    _safe_print(f"{'='*60}\n")
 
     return Phase1Result(contents=results, failed_files=failed_files)
 
@@ -174,7 +178,7 @@ def save_markdown_output(
     with open(output_file, "w", encoding="utf-8") as f:
         f.write(combined_md)
 
-    print(f"Markdown 已保存: {output_file}")
+    _safe_print(f"Markdown 已保存: {output_file}")
 
     # 同时生成 HTML 预览
     html_content = markdown.markdown(
@@ -204,5 +208,5 @@ def save_markdown_output(
 </body>
 </html>""")
 
-    print(f"HTML 预览已生成: {html_file}")
+    _safe_print(f"HTML 预览已生成: {html_file}")
     return output_file
