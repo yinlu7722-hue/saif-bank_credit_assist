@@ -204,25 +204,7 @@ def _find_value_in_table(
     return None
 
 
-def _parse_number(text: str) -> float | None:
-    """从文本中解析数字（支持英文逗号、中文逗号分隔符）"""
-    if not text:
-        return None
-    # 处理万元、亿元等单位
-    text = text.strip()
-    # 先移除所有逗号分隔符（英文 , 和中文 ，）
-    text_clean = text.replace(',', '').replace('，', '')
-    multipliers: dict[str, float] = {"万": 1e4, "亿": 1e8, "千": 1e3, "%": 0.01}
-    for unit, mult in multipliers.items():
-        if unit in text_clean:
-            try:
-                return float(re.sub(r'[^\d.-]', '', text_clean)) * mult
-            except ValueError:
-                return None
-    try:
-        return float(re.sub(r'[^\d.-]', '', text_clean))
-    except ValueError:
-        return None
+from shared.parsing import parse_number
 
 
 def _extract_from_text(markdown_content: str) -> dict[str, float | None]:
@@ -247,7 +229,7 @@ def _extract_from_text(markdown_content: str) -> dict[str, float | None]:
         m = re.search(pat, markdown_content)
         if m:
             raw = m.group(1) if m.lastindex else m.group(0).split('净利润')[1].lstrip('：: \t　')
-            val = _parse_number(raw)
+            val = parse_number(raw)
             if val is not None:
                 extracted["net_profit"] = val
                 break
@@ -262,7 +244,7 @@ def _extract_from_text(markdown_content: str) -> dict[str, float | None]:
         m = re.search(pat, markdown_content)
         if m:
             raw = m.group(1) if m.lastindex else re.split(r'营业收(?:入|总收入)', m.group(0))[-1].lstrip('：: \t　')
-            val = _parse_number(raw)
+            val = parse_number(raw)
             if val is not None:
                 extracted["operating_revenue"] = val
                 break
@@ -275,7 +257,7 @@ def _extract_from_text(markdown_content: str) -> dict[str, float | None]:
     for pat in patterns:
         m = re.search(pat, markdown_content)
         if m:
-            val = _parse_number(m.group(1))
+            val = parse_number(m.group(1))
             if val is not None:
                 extracted["gross_margin"] = val
                 break
@@ -288,7 +270,7 @@ def _extract_from_text(markdown_content: str) -> dict[str, float | None]:
     for pat in patterns:
         m = re.search(pat, markdown_content)
         if m:
-            val = _parse_number(m.group(1))
+            val = parse_number(m.group(1))
             if val is not None:
                 extracted["current_ratio"] = val
                 break
@@ -301,7 +283,7 @@ def _extract_from_text(markdown_content: str) -> dict[str, float | None]:
     for pat in patterns:
         m = re.search(pat, markdown_content)
         if m:
-            val = _parse_number(m.group(1))
+            val = parse_number(m.group(1))
             if val is not None:
                 extracted["debt_to_asset_ratio"] = val
                 break
@@ -324,14 +306,14 @@ def _extract_from_text(markdown_content: str) -> dict[str, float | None]:
         if m:
             if m.lastindex == 2:
                 # 两组数字：研发费用 和 营业收入
-                rd = _parse_number(m.group(1))
-                rev = _parse_number(m.group(2))
+                rd = parse_number(m.group(1))
+                rev = parse_number(m.group(2))
                 if rd and rev and rev > 0:
                     extracted["rd_expense_ratio"] = round((rd / rev) * 100, 2)
                     break
             else:
                 # 单个数值：直接是占比
-                val = _parse_number(m.group(1))
+                val = parse_number(m.group(1))
                 if val is not None:
                     extracted["rd_expense_ratio"] = val
                     break
@@ -348,7 +330,7 @@ def _extract_from_text(markdown_content: str) -> dict[str, float | None]:
     for pat in cagr_patterns:
         m = re.search(pat, markdown_content)
         if m:
-            val = _parse_number(m.group(1))
+            val = parse_number(m.group(1))
             if val is not None and 0 < val < 100:  # CAGR 通常在 0-100% 之间
                 extracted["revenue_cagr"] = val
                 break
@@ -421,9 +403,9 @@ async def compute_financial_metrics(
 
     def _col_val(row: list[str], col_idx: int | None = None) -> float | None:
         if col_idx is not None and 0 <= col_idx < len(row):
-            return _parse_number(row[col_idx])
+            return parse_number(row[col_idx])
         for i in range(len(row) - 1, 0, -1):
-            v = _parse_number(row[i])
+            v = parse_number(row[i])
             if v is not None:
                 return v
         return None
@@ -528,7 +510,7 @@ async def compute_financial_metrics(
         for row in is_rows:
             if "营业收入" in " ".join(row) and len(row) >= 4:
                 for col_idx in range(1, len(row)):
-                    val = _parse_number(row[col_idx])
+                    val = parse_number(row[col_idx])
                     if val and 0 < val < 1e9:
                         revenue_history.append(val)
     if len(revenue_history) >= 2 and revenue_history[-1] > 0:
@@ -575,9 +557,9 @@ async def extract_tech_innovation_metrics(
         for row in rows:
             row_text: str = " ".join(row)
             if "研发费用" in row_text or "研究开发费" in row_text:
-                rd_expense = _parse_number(row[-1])
+                rd_expense = parse_number(row[-1])
             if ("营业收入" in row_text or "营业总收入" in row_text) and "研发" not in row_text:
-                revenue = _parse_number(row[-1])
+                revenue = parse_number(row[-1])
 
     if rd_expense and revenue and revenue > 0:
         rd_ratio: float = (rd_expense / revenue) * 100
@@ -689,8 +671,8 @@ async def extract_tech_innovation_metrics(
     # 从全文文本中提取研发费用占比
     m_rd = re.search(r'研发费用[^\d]*([\d,]+\.?\d*)[^\d]*营业收入[^\d]*([\d,]+\.?\d*)', markdown_content)
     if m_rd and not result.rd_expense_ratio:
-        rd_val = _parse_number(m_rd.group(1))
-        rev_val = _parse_number(m_rd.group(2))
+        rd_val = parse_number(m_rd.group(1))
+        rev_val = parse_number(m_rd.group(2))
         if rd_val and rev_val and rev_val > 0:
             rd_ratio_text = round((rd_val / rev_val) * 100, 2)
             result.rd_expense_ratio = MetricWithSource(
@@ -1072,7 +1054,7 @@ def extract_from_financial_tables(markdown_text: str) -> dict[str, Any]:
             for col_idx in range(1, len(row)):
                 val_str = row[col_idx].strip()
                 if val_str:
-                    parsed = _parse_number(val_str)
+                    parsed = parse_number(val_str)
                     if parsed is not None:
                         target_dict[item_name] = parsed
                         break
@@ -1185,7 +1167,7 @@ async def run_income_verification(
         for pat in bank_patterns:
             m = re.search(pat, markdown_content)
             if m:
-                val = _parse_number(m.group(1))
+                val = parse_number(m.group(1))
                 if val and val > 0:
                     result["bank_inflow"] = val
                     break
@@ -1205,7 +1187,7 @@ async def run_income_verification(
         for pat in tax_patterns:
             m = re.search(pat, markdown_content)
             if m:
-                val = _parse_number(m.group(1))
+                val = parse_number(m.group(1))
                 if val and val > 0:
                     result["tax_revenue"] = val
                     break
@@ -1364,7 +1346,7 @@ def extract_annual_financial_data(markdown_content: str) -> dict[int, dict[str, 
                 if any(kw in label for kw in keywords):
                     for year, col_idx in year_cols.items():
                         if col_idx < df.shape[1]:
-                            val = _parse_number(df.iloc[row_idx, col_idx])
+                            val = parse_number(df.iloc[row_idx, col_idx])
                             if val is not None:
                                 if year not in annual_data:
                                     annual_data[year] = {}

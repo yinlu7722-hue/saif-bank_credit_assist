@@ -11,30 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from shared.utils import safe_print as _safe_print
-
-
-def _parse_number(value: Any) -> float | None:
-    """安全解析数字，支持字符串和数值类型"""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        import re
-        text = value.strip().replace(",", "").replace("，", "")
-        multipliers = {"万": 1e4, "亿": 1e8, "千": 1e3, "%": 0.01}
-        for unit, mult in multipliers.items():
-            if unit in text:
-                try:
-                    num = float(re.sub(r"[^\d.-]", "", text))
-                    return num * mult
-                except ValueError:
-                    return None
-        try:
-            return float(re.sub(r"[^\d.-]", "", text))
-        except ValueError:
-            return None
-    return None
+from shared.parsing import parse_number
 
 
 def compute_financial_ratios(raw_financials: dict[str, Any]) -> dict[str, Any]:
@@ -50,33 +27,33 @@ def compute_financial_ratios(raw_financials: dict[str, Any]) -> dict[str, Any]:
     computed: dict[str, Any] = {}
 
     # ── 原始值解析 ────────────────────────────────────────────────
-    revenue = _parse_number(raw_financials.get("operating_revenue"))
-    cost = _parse_number(raw_financials.get("operating_cost"))
-    net_profit = _parse_number(raw_financials.get("net_profit"))
-    total_profit = _parse_number(raw_financials.get("total_profit"))
+    revenue = parse_number(raw_financials.get("operating_revenue"))
+    cost = parse_number(raw_financials.get("operating_cost"))
+    net_profit = parse_number(raw_financials.get("net_profit"))
+    total_profit = parse_number(raw_financials.get("total_profit"))
 
-    current_assets = _parse_number(raw_financials.get("current_assets"))
-    current_liabilities = _parse_number(raw_financials.get("current_liabilities"))
-    inventory = _parse_number(raw_financials.get("inventory"))
+    current_assets = parse_number(raw_financials.get("current_assets"))
+    current_liabilities = parse_number(raw_financials.get("current_liabilities"))
+    inventory = parse_number(raw_financials.get("inventory"))
 
-    total_assets = _parse_number(raw_financials.get("total_assets"))
-    total_liabilities = _parse_number(raw_financials.get("total_liabilities"))
-    total_equity = _parse_number(raw_financials.get("total_equity"))
+    total_assets = parse_number(raw_financials.get("total_assets"))
+    total_liabilities = parse_number(raw_financials.get("total_liabilities"))
+    total_equity = parse_number(raw_financials.get("total_equity"))
 
-    accounts_receivable = _parse_number(raw_financials.get("accounts_receivable"))
-    accounts_payable = _parse_number(raw_financials.get("accounts_payable"))
+    accounts_receivable = parse_number(raw_financials.get("accounts_receivable"))
+    accounts_payable = parse_number(raw_financials.get("accounts_payable"))
 
-    short_term_borrowing = _parse_number(raw_financials.get("short_term_borrowing"))
-    notes_payable = _parse_number(raw_financials.get("notes_payable"))
-    long_term_borrowing = _parse_number(raw_financials.get("long_term_borrowing"))
-    bonds_payable = _parse_number(raw_financials.get("bonds_payable"))
+    short_term_borrowing = parse_number(raw_financials.get("short_term_borrowing"))
+    notes_payable = parse_number(raw_financials.get("notes_payable"))
+    long_term_borrowing = parse_number(raw_financials.get("long_term_borrowing"))
+    bonds_payable = parse_number(raw_financials.get("bonds_payable"))
 
-    cash_equivalents = _parse_number(raw_financials.get("cash_equivalents"))
-    trading_financial_assets = _parse_number(raw_financials.get("trading_financial_assets"))
-    notes_receivable = _parse_number(raw_financials.get("notes_receivable"))
+    cash_equivalents = parse_number(raw_financials.get("cash_equivalents"))
+    trading_financial_assets = parse_number(raw_financials.get("trading_financial_assets"))
+    notes_receivable = parse_number(raw_financials.get("notes_receivable"))
 
-    rd_expense = _parse_number(raw_financials.get("rd_expense"))
-    average_assets = _parse_number(raw_financials.get("average_total_assets"))
+    rd_expense = parse_number(raw_financials.get("rd_expense"))
+    average_assets = parse_number(raw_financials.get("average_total_assets"))
 
     # ── 盈利能力指标 ──────────────────────────────────────────────
     if revenue is not None and cost is not None:
@@ -166,7 +143,7 @@ def compute_financial_ratios(raw_financials: dict[str, Any]) -> dict[str, Any]:
     # ── 成长能力指标 ──────────────────────────────────────────────
     profit_history = raw_financials.get("net_profit_history", [])
     if isinstance(profit_history, list) and len(profit_history) >= 2:
-        profits = [_parse_number(p) for p in profit_history if _parse_number(p) is not None]
+        profits = [parse_number(p) for p in profit_history if parse_number(p) is not None]
         if len(profits) >= 2 and profits[-1] > 0:
             n = len(profits) - 1
             cagr = (profits[0] / profits[-1]) ** (1 / n) - 1
@@ -176,7 +153,7 @@ def compute_financial_ratios(raw_financials: dict[str, Any]) -> dict[str, Any]:
     if rd_expense is not None:
         computed["rd_expense_amount"] = round(rd_expense, 2)
     elif revenue is not None and raw_financials.get("rd_expense_ratio") is not None:
-        rd_ratio = _parse_number(raw_financials.get("rd_expense_ratio"))
+        rd_ratio = parse_number(raw_financials.get("rd_expense_ratio"))
         if rd_ratio is not None and revenue > 0:
             computed["rd_expense_amount"] = round(revenue * rd_ratio / 100, 2)
 

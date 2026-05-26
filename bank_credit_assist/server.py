@@ -9,28 +9,28 @@ server.py
 from __future__ import annotations
 
 import asyncio
+import logging as _logging
 import os
+import re as _re
 import shutil
 import sys
-import time
+import time as _time_module
 import traceback
 import uuid
 from pathlib import Path
 from typing import Any
 
-# ── Windows 终端 UTF-8 编码修复（防止 GBK 编码错误）─────────────
-# 在 Windows 上，默认终端编码为 GBK，无法编码 ✗✔✅❌ 等 Unicode 符号。
-# 重新配置 stdout/stderr 为 UTF-8，从根源上避免所有 GBK 编码问题。
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+_logger = _logging.getLogger("credit_assist")
+
+from shared.encoding import fix_windows_console_encoding
+
+fix_windows_console_encoding()
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from shared.config import API_ACCESS_KEY
 
 from phase1_parser import phase1_parse_documents
 from phase2_analysis import run_financial_analysis, extract_tech_innovation_metrics
@@ -40,49 +40,46 @@ from phase2_inference import run_inference
 from phase3_report import generate_report
 from phase4_committee import run_committee
 from shared.config import PROJECT_ROOT, OUTPUT_DIR
+from shared.data_schema import (
+    UNIFIED_DOCUMENT_LIST as DOCUMENT_LIST,
+    UNIFIED_REQUIRED_CODES as REQUIRED_CODES,
+    UNIFIED_EXCEL_EXTENSIONS as EXCEL_EXTENSIONS,
+    UNIFIED_TEXT_EXTENSIONS as SUPPORTED_TEXT_EXTENSIONS,
+)
 from shared.utils import safe_print as _safe_print
 
 
-# ============================================================================
-# 资料清单常量（与前端保持一致）
-# ============================================================================
+def _sanitize_filename(filename: str) -> str:
+    """移除路径遍历字符，仅保留安全字符"""
+    safe = Path(filename).name
+    safe = _re.sub(r'[\\/:*?"<>|]', '_', safe)
+    if not safe or safe in ('.', '..'):
+        safe = 'unnamed_file'
+    return safe
 
-REQUIRED_CODES: set[str] = {"A1", "A2", "B1", "B2"}
-EXCEL_EXTENSIONS: set[str] = {".xls", ".xlsx", ".xlsm"}
 
-DOCUMENT_LIST: list[dict] = [
-    # A 类 — 主体资格
-    {"code": "A1", "name": "营业执照（正副本）", "level": "required"},
-    {"code": "A2", "name": "法定代表人身份证", "level": "required"},
-    {"code": "A3", "name": "公司章程", "level": "suggested"},
-    {"code": "A4", "name": "验资报告", "level": "if-exists"},
-    {"code": "A5", "name": "股权树状图", "level": "if-exists"},
-    # B 类 — 财务资料
-    {"code": "B1", "name": "财务报表（近三年+最新一期）", "level": "required"},
-    {"code": "B2", "name": "银行流水（12个月）", "level": "required"},
-    {"code": "B3", "name": "纳税申报表（近三年）", "level": "suggested"},
-    {"code": "B4", "name": "银行授信清单", "level": "suggested"},
-    # C 类 — 经营佐证
-    {"code": "C1", "name": "经营场所证明", "level": "suggested"},
-    {"code": "C2", "name": "上下游交易佐证", "level": "suggested"},
-    {"code": "C3", "name": "进出口单据", "level": "if-exists"},
-    {"code": "C4", "name": "在手订单/合同", "level": "suggested"},
-    # D 类 — 科技属性
-    {"code": "D1", "name": "高新技术企业证书", "level": "suggested"},
-    {"code": "D2", "name": "知识产权/专利清单", "level": "suggested"},
-    {"code": "D3", "name": "研发费用明细账", "level": "suggested"},
-    {"code": "D4", "name": "核心技术团队履历", "level": "suggested"},
-    # E 类 — 经营概况
-    {"code": "E1", "name": "主营业务情况", "level": "suggested"},
-    {"code": "E2", "name": "公司基本介绍", "level": "suggested"},
-    # G 类 — 担保资料（条件触发：前端勾选担保类型后显示）
-    {"code": "G1", "name": "法人担保资料", "level": "conditional"},
-    {"code": "G2", "name": "抵质押物资料", "level": "conditional"},
-    {"code": "G3", "name": "自然人担保资料", "level": "conditional"},
-]
+def _safe_error(e: Exception) -> str:
+    """脱敏错误信息：记录完整 traceback 到日志，仅返回通用错误提示给前端"""
+    _logger.error(f"Internal error: {type(e).__name__}: {e}", exc_info=True)
+    return f"处理出错，请联系管理员。错误ID: {uuid.uuid4().hex[:8]}"
 
-# 支持的文件格式（后端 MinerU 解析支持）
-SUPPORTED_TEXT_EXTENSIONS: set[str] = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".jpg", ".jpeg", ".png", ".html", ".htm"}
+
+SESSION_TTL_SECONDS: int = 3600  # 1 小时过期
+
+
+def _cleanup_expired_sessions() -> int:
+    """清理过期 session，返回清理数量"""
+    now = _time_module.time()
+    expired_ids = [
+        sid for sid, state in sessions.items()
+        if now - state.last_accessed > SESSION_TTL_SECONDS
+    ]
+    for sid in expired_ids:
+        state = sessions[sid]
+        if state.temp_dir.exists():
+            shutil.rmtree(state.temp_dir, ignore_errors=True)
+        del sessions[sid]
+    return len(expired_ids)
 
 
 # ============================================================================
@@ -93,6 +90,8 @@ class SessionState:
     """单个会话的工作流状态"""
 
     def __init__(self) -> None:
+        self.created_at: float = _time_module.time()
+        self.last_accessed: float = _time_module.time()
         self.workflow_status: str = "idle"
         self.uploaded_files: dict[str, list[dict]] = {}  # {doc_code: [{id, name, path}]}
         self.file_id_counter: int = 0
@@ -119,8 +118,14 @@ sessions: dict[str, SessionState] = {}
 
 
 def get_session(session_id: str) -> SessionState:
+    # 每 20 次访问触发一次过期清理
+    if len(sessions) % 20 == 0:
+        _cleanup_expired_sessions()
+
     if session_id not in sessions:
         sessions[session_id] = SessionState()
+    else:
+        sessions[session_id].last_accessed = _time_module.time()
     return sessions[session_id]
 
 
@@ -128,7 +133,29 @@ def get_session(session_id: str) -> SessionState:
 # FastAPI 应用
 # ============================================================================
 
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    """简单 API Key 认证中间件"""
+
+    SKIP_PATHS = {"/", "/static", "/docs", "/openapi.json", "/redoc"}
+
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        if any(path.startswith(p) for p in self.SKIP_PATHS):
+            return await call_next(request)
+
+        api_key = API_ACCESS_KEY
+        if not api_key:
+            return await call_next(request)
+
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {api_key}":
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+        return await call_next(request)
+
+
 app = FastAPI(title="对公信贷智能化辅助系统")
+app.add_middleware(APIKeyMiddleware)
 
 # 挂载项目根目录的静态文件（index.html 在根目录）
 STATIC_DIR = PROJECT_ROOT
@@ -167,14 +194,15 @@ async def upload_files(
             continue
 
         file_id = state.get_next_file_id()
-        save_path = state.temp_dir / f"{doc_code}_{file_id}_{file.filename}"
+        safe_name = _sanitize_filename(file.filename)
+        save_path = state.temp_dir / f"{doc_code}_{file_id}_{safe_name}"
         with open(save_path, "wb") as f:
             content = await file.read()
             f.write(content)
 
         state.uploaded_files[doc_code].append({
             "id": file_id,
-            "name": file.filename,
+            "name": safe_name,
             "path": str(save_path),
         })
         existing_names.add(file.filename)
@@ -415,7 +443,7 @@ async def _run_phase1(state: SessionState) -> None:
         await _run_phase2(state)
 
     except Exception as e:
-        state.error_message = str(e).encode("ascii", errors="replace").decode("ascii")
+        state.error_message = _safe_error(e)
         state.workflow_status = "error"
 
 
@@ -489,30 +517,79 @@ async def _run_phase2(state: SessionState) -> None:
             if step["status"] == "running":
                 step["status"] = "failed"
         _safe_print(traceback.format_exc())
-        state.error_message = str(e).encode("ascii", errors="replace").decode("ascii")
+        state.error_message = _safe_error(e)
         state.workflow_status = "error"
 
 
 async def _run_phase3(state: SessionState, corrections: dict) -> None:
-    """后台执行 Phase3：AI 推理 → 报告生成（含进度计时）"""
+    """后台执行 Phase3：AI 推理 → 报告生成（含平滑进度）"""
     import time as _time
+
     _start_time = _time.time()
-    _timeout = 180  # 3 分钟
+    _inference_timeout = 300  # AI 推理单独 5 分钟上限
 
     async def _update_progress(percent: int, message: str) -> None:
-        state.phase3_progress = {"percent": percent, "message": message}
+        state.phase3_progress = {"percent": min(percent, 100), "message": message}
 
-    async def _tick_progress() -> None:
-        """按时间推进百分比，最多到 85%（留给推理完成跳转）"""
-        elapsed = _time.time() - _start_time
-        pct = min(85, int(elapsed / _timeout * 100))
-        await _update_progress(pct, "正在生成报告...")
+    # ── 推理阶段平滑计时器 ──────────────────────────────────
+    _tick_done = 0
+    _tick_total = 12
+
+    async def _inference_smooth_tick() -> None:
+        """后台每 1 秒推进推理阶段进度，以 2 分钟为限平滑增长到 78%"""
+        _inference_estimate = 120  # 预估推理耗时上限（秒）
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                elapsed = _time.time() - _start_time
+                ratio = _tick_done / _tick_total if _tick_total > 0 else 0
+                if ratio > 0:
+                    # 有实际完成数据：基于完成比例估算
+                    estimated_total = elapsed / ratio
+                    remaining = max(0, estimated_total - elapsed)
+                    pct = 10 + int(min(ratio * 1.05, 0.95) * 70)
+                    if remaining > 10:
+                        msg = f"AI智能推理中...预计还需约 {int(remaining)} 秒"
+                    elif remaining > 3:
+                        msg = f"AI智能推理中...即将完成"
+                    else:
+                        msg = "AI智能推理中...正在汇总结果"
+                else:
+                    # 首批尚未完成：基于时间平滑推进（2 分钟为限，最多到 25%）
+                    time_ratio = min(elapsed / _inference_estimate, 1.0)
+                    pct = 10 + int(time_ratio * 15)
+                    if elapsed < 10:
+                        msg = "AI智能推理中...正在启动推理引擎"
+                    elif elapsed < 30:
+                        msg = "AI智能推理中...正在生成分析文本，请耐心等候"
+                    elif elapsed < 60:
+                        msg = "AI智能推理中...处理较大资料，预计还需约 1 分钟"
+                    else:
+                        msg = f"AI智能推理中...已处理 {int(elapsed)} 秒，请继续等候"
+                _update_progress(pct, msg)
+        except asyncio.CancelledError:
+            pass
+
+    async def _inference_progress(done: int, total: int) -> None:
+        """批次实际完成回调"""
+        nonlocal _tick_done, _tick_total
+        _tick_done = done
+        _tick_total = total
 
     try:
+        if state.phase1_result is None or state.phase2_result is None:
+            raise RuntimeError("前置阶段数据缺失，请重新上传资料并解析")
+
         markdown = state.phase1_result["combined_markdown"]
         phase2 = state.phase2_result
 
         await _update_progress(0, "正在准备数据...")
+
+        # ── 过滤 financial：只保留扁平键值对 ──
+        _nested_keys = {"profitability", "liquidity", "leverage", "operation", "growth", "summary"}
+        _flat_financial = {k: v for k, v in phase2.get("financial", {}).items() if k not in _nested_keys}
+
+        await _update_progress(2, "正在提取财务报表关键指标...")
 
         # 合并修正数据到财务指标
         financial = phase2.get("financial", {})
@@ -527,7 +604,7 @@ async def _run_phase3(state: SessionState, corrections: dict) -> None:
         tech = phase2.get("tech", {})
         income_verification = phase2.get("income_verification", {})
 
-        await _update_progress(5, "正在准备数据...")
+        await _update_progress(5, "正在整理企业基本信息...")
 
         # ── Phase 3.0: AI 推理 ──────────────────────────────────
         state.phase2_progress = [
@@ -540,7 +617,7 @@ async def _run_phase3(state: SessionState, corrections: dict) -> None:
             {"step": "3.2", "label": "文档生成", "status": "pending"},
         ]
 
-        await _update_progress(10, "正在执行AI智能推理...")
+        await _update_progress(8, "正在启动AI推理引擎...")
 
         enterprise_data_for_inference = {
             "enterprise_name": (basic_info.get("company_name") or financial.get("enterprise_name") or "待提取"),
@@ -553,27 +630,46 @@ async def _run_phase3(state: SessionState, corrections: dict) -> None:
             "business_model": "",
         }
 
-        # 启动计时更新（每秒 tick 一次，后台运行）
-        _tick_task = asyncio.create_task(_tick_loop(_start_time, _timeout, _update_progress))
+        await _update_progress(10, "AI智能推理中...正在启动推理引擎")
 
-        inference_text = await run_inference(
-            enterprise_data=enterprise_data_for_inference,
-            financial_data=financial,
+        # 启动平滑计时器
+        _tick_task = asyncio.create_task(_inference_smooth_tick())
+
+        inference_text = await asyncio.wait_for(
+            run_inference(
+                enterprise_data=enterprise_data_for_inference,
+                financial_data=_flat_financial,
+                progress_callback=_inference_progress,
+            ),
+            timeout=_inference_timeout,
         )
         state.inference_text = inference_text
 
         _tick_task.cancel()
-        await _update_progress(85, "AI推理完成，正在生成文档...")
+        await _update_progress(80, "AI推理完成，正在汇总分析结果...")
 
         state.phase2_progress[5]["status"] = "done"
         _safe_print(f"[Phase3.0] Inference done: {len(inference_text)} fields generated")
 
-        # ── Phase 3.1: 文档生成 ──────────────────────────────────
+        # ── Phase 3.1: 文档生成（分步推进，间隔拉长以便前端轮询捕获）──
         state.phase2_progress[6]["status"] = "running"
-        await _update_progress(88, "正在构建报告文档...")
+
+        await _update_progress(82, "正在构建报告封面及目录...")
+        await asyncio.sleep(0.8)
+
+        await _update_progress(85, "正在编制企业基本信息...")
+        await asyncio.sleep(0.8)
+
+        await _update_progress(88, "正在编制经营分析及财务报表...")
+        await asyncio.sleep(0.8)
+
+        await _update_progress(92, "正在撰写风险分析与授信建议...")
+        await asyncio.sleep(0.8)
 
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        output_path = OUTPUT_DIR / f"授信审查报告_{int(time.time())}.docx"
+        output_path = OUTPUT_DIR / f"授信审查报告_{int(_time.time())}.docx"
+
+        await _update_progress(95, "正在编译生成Word文档...")
 
         await generate_report(
             enterprise_name=(basic_info.get("company_name") or financial.get("enterprise_name") or "待提取"),
@@ -590,15 +686,24 @@ async def _run_phase3(state: SessionState, corrections: dict) -> None:
 
         state.phase2_progress[6]["status"] = "done"
         state.report_path = str(output_path)
+        await _update_progress(98, "正在保存文档...")
         await _update_progress(100, "报告生成完成！")
         state.workflow_status = "done"
+
+    except asyncio.TimeoutError:
+        for step in state.phase2_progress:
+            if step["status"] == "running":
+                step["status"] = "failed"
+        _safe_print(f"[Phase3] Inference timed out after {_inference_timeout}s")
+        state.error_message = _safe_error(TimeoutError(f"AI推理超时（{_inference_timeout}秒），请检查网络或 API 服务"))
+        state.workflow_status = "error"
 
     except Exception as e:
         for step in state.phase2_progress:
             if step["status"] == "running":
                 step["status"] = "failed"
         _safe_print(traceback.format_exc())
-        state.error_message = str(e).encode("ascii", errors="replace").decode("ascii")
+        state.error_message = _safe_error(e)
         state.workflow_status = "error"
 
 
@@ -609,8 +714,8 @@ async def _run_phase4(session_id: str) -> None:
     try:
         # 准备上下文数据
         session_data = {
-            "phase2_result": state.phase2_result,
-            "inference_text": getattr(state, "inference_text", {}),
+            "phase2_result": state.phase2_result or {},
+            "inference_text": state.inference_text or {},
         }
 
         # 进度回调：将每轮发言实时写入 state
@@ -633,28 +738,19 @@ async def _run_phase4(session_id: str) -> None:
         }
         state.committee_running = False
         state.workflow_status = "done"
+        final_conc = (result.final_conclusion or {}).get("final_conclusion", "N/A")
+        _safe_print(f"[Phase4] Committee done — speeches: {len(result.debate_log)}, conclusion: {final_conc}")
 
     except Exception as e:
+        _safe_print(f"[Phase4] EXCEPTION: {type(e).__name__}: {e}")
         _safe_print(traceback.format_exc())
         state.phase4_result = {
             "status": "error",
             "error": str(e).encode("ascii", errors="replace").decode("ascii"),
         }
+        state.error_message = state.phase4_result["error"]
         state.committee_running = False
         state.workflow_status = "error"
-
-
-async def _tick_loop(start_time: float, timeout: float, update_fn) -> None:
-    """后台每秒更新进度百分比"""
-    import time as _time
-    try:
-        while True:
-            await asyncio.sleep(1)
-            elapsed = _time.time() - start_time
-            pct = min(85, int(elapsed / timeout * 100))
-            await update_fn(pct, "正在生成报告...")
-    except asyncio.CancelledError:
-        pass
 
 
 # ============================================================================

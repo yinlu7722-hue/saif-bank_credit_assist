@@ -10,8 +10,9 @@ import asyncio
 import os
 from pathlib import Path
 
-# 强制 UTF-8 输出（Windows 终端兼容）
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+from shared.encoding import fix_windows_console_encoding
+
+fix_windows_console_encoding()
 
 # 确保项目根目录在 sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))

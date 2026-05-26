@@ -16,15 +16,9 @@ import os
 import re
 from typing import Any
 
-import anthropic
-
-from shared.config import MINIMAX_API_KEY, MINIMAX_MODEL, HTTPS_PROXY
-from shared.utils import safe_print as _safe_print
-
-MINIMAX_API_BASE: str = "https://api.minimaxi.com/anthropic"
-
-if HTTPS_PROXY:
-    os.environ["HTTPS_PROXY"] = HTTPS_PROXY
+from shared.config import MINIMAX_MODEL, INFERENCE_MAX_CONCURRENT
+from shared.utils import safe_print as _safe_print, strip_markdown_fences
+from shared.llm_client import create_async_anthropic_client
 
 
 # ============================================================================
@@ -264,8 +258,38 @@ STRUCTURED_FIELDS: dict[str, dict[str, str]] = {
     },
 }
 
-# 并发控制
-MAX_CONCURRENT = 3
+# 并发控制（可通过环境变量 INFERENCE_MAX_CONCURRENT 覆盖，默认 6）
+MAX_CONCURRENT = INFERENCE_MAX_CONCURRENT
+
+# ── 上下文裁剪：每个 batch 需要的 financial_data 键子集 ──────────
+# None = 传全量, 空 set = 不传, 非空 set = 仅传指定键
+_FIN_SUMMARY_KEYS = {
+    "enterprise_name", "operating_revenue", "operating_cost",
+    "gross_margin", "net_profit", "total_profit",
+    "total_assets", "total_liabilities", "total_equity",
+    "operating_cash_flow", "revenue_yoy_growth", "net_profit_yoy_growth",
+}
+
+BATCH_FINANCIAL_FILTERS: list[set[str] | None] = [
+    set(),                   # Batch 1: 基本信息 — 无需财务数据
+    _FIN_SUMMARY_KEYS,       # Batch 2: 经营+毛利率 — 需摘要
+    set(),                   # Batch 3: 产能/订单/投资 — 无需财务数据
+    None,                    # Batch 4: 财务分析 — 需全量
+    _FIN_SUMMARY_KEYS,       # Batch 5: 信用+行业 — 需摘要
+    set(),                   # Batch 6: 行业/价格趋势 — 无需财务数据
+    _FIN_SUMMARY_KEYS,       # Batch 7: 授信用途/还款 — 需摘要
+    None,                    # Batch 8: 风险/担保 — 需全量
+    None,                    # Batch 9: 结论/授信方案 — 需全量
+]
+
+
+def _trim_financial(fin_data: dict, keys: set[str] | None) -> dict:
+    """按指定键子集裁剪 financial_data，None 表示传全量"""
+    if keys is None:
+        return fin_data
+    if not keys:
+        return {}
+    return {k: v for k, v in fin_data.items() if k in keys}
 
 
 # ============================================================================
@@ -276,13 +300,7 @@ class MinimaxInferenceEngine:
     """Phase 2.6 AI 推理引擎 — 并行批量版"""
 
     def __init__(self, api_key: str | None = None) -> None:
-        key: str = api_key or MINIMAX_API_KEY
-        self.client = anthropic.Anthropic(
-            api_key=key,
-            base_url=MINIMAX_API_BASE,
-            timeout=120.0,
-            max_retries=2,
-        )
+        self.client = create_async_anthropic_client(api_key=api_key)
         self.model = MINIMAX_MODEL
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
@@ -298,7 +316,6 @@ class MinimaxInferenceEngine:
         """一次 API 调用生成一组字段，返回 {field_name: text}"""
         total_batches = len(FIELD_BATCHES)
 
-        # 构建字段说明
         field_descriptions: list[str] = []
         for name in field_names:
             meta = INFERENCE_FIELDS.get(name, {})
@@ -306,7 +323,10 @@ class MinimaxInferenceEngine:
             desc = meta.get("description", "")
             field_descriptions.append(f"  - {name}（{ch}）：{desc}")
 
-        user_prompt = f"""请为以下 {len(field_names)} 个字段生成分析文本：
+        async with self._semaphore:
+            _safe_print(f"  [Batch {batch_index+1}/{total_batches}] Generating {len(field_names)} fields: {', '.join(field_names)}...")
+            try:
+                user_prompt = f"""请为以下 {len(field_names)} 个字段生成分析文本：
 
 {chr(10).join(field_descriptions)}
 
@@ -322,12 +342,7 @@ class MinimaxInferenceEngine:
 3. 每个字段 200-400 字
 4. 数据不足的字段标注"根据现有资料无法确定，建议实地调研补充"
 """
-
-        async with self._semaphore:
-            _safe_print(f"  [Batch {batch_index+1}/{total_batches}] Generating {len(field_names)} fields: {', '.join(field_names)}...")
-            try:
-                response = await asyncio.to_thread(
-                    self.client.messages.create,
+                response = await self.client.messages.create(
                     model=self.model,
                     max_tokens=4096,
                     system=BATCH_SYSTEM_PROMPT,
@@ -336,12 +351,11 @@ class MinimaxInferenceEngine:
 
                 raw_text: str = ""
                 for block in response.content:
-                    if hasattr(block, "text") and block.text:
+                    if getattr(block, "text", None):
                         raw_text = block.text
                         break
 
-                raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text.strip())
-                raw_text = re.sub(r"\s*```$", "", raw_text)
+                raw_text = strip_markdown_fences(raw_text)
 
                 parsed = json.loads(raw_text)
                 if isinstance(parsed, dict):
@@ -366,7 +380,10 @@ class MinimaxInferenceEngine:
         description = field_meta.get("description", "")
         chapter = field_meta.get("chapter", "")
 
-        user_prompt = f"""基于以下企业资料，生成【{chapter} - {field_name}】的结构化数据。
+        async with self._semaphore:
+            _safe_print(f"  [STRUCT] Generating: {field_name}...")
+            try:
+                user_prompt = f"""基于以下企业资料，生成【{chapter} - {field_name}】的结构化数据。
 
 【字段说明】：{description}
 
@@ -382,12 +399,7 @@ class MinimaxInferenceEngine:
 3. 如数据不足，输出空数组 []
 4. 数字字段使用数值类型，文本字段使用字符串类型
 """
-
-        async with self._semaphore:
-            _safe_print(f"  [STRUCT] Generating: {field_name}...")
-            try:
-                response = await asyncio.to_thread(
-                    self.client.messages.create,
+                response = await self.client.messages.create(
                     model=self.model,
                     max_tokens=2048,
                     system=INFERENCE_SYSTEM_PROMPT,
@@ -396,12 +408,11 @@ class MinimaxInferenceEngine:
 
                 raw_text: str = ""
                 for block in response.content:
-                    if hasattr(block, "text") and block.text:
+                    if getattr(block, "text", None):
                         raw_text = block.text
                         break
 
-                raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text.strip())
-                raw_text = re.sub(r"\s*```$", "", raw_text)
+                raw_text = strip_markdown_fences(raw_text)
 
                 parsed = json.loads(raw_text)
                 if isinstance(parsed, list):
@@ -420,25 +431,47 @@ class MinimaxInferenceEngine:
         self,
         enterprise_data: dict,
         financial_data: dict,
+        progress_callback: callable = None,
     ) -> dict[str, str]:
-        """并行批量生成所有字段"""
+        """并行批量生成所有字段，完成后调用 progress_callback(done_count, total_count)"""
         total_batches = len(FIELD_BATCHES)
         total_structured = len(STRUCTURED_FIELDS)
+        total_tasks = total_batches + total_structured
+        completed = 0
+
+        def _on_batch_done(_=None) -> None:
+            nonlocal completed
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total_tasks)
+
         _safe_print(f"\n[Phase 2.6] Starting AI inference: {total_batches} batches + {total_structured} structured (max {MAX_CONCURRENT} concurrent)")
         _safe_print("=" * 60)
 
         # ── 并行执行所有批量调用 ────────────────────────────────
+        async def _tracked_batch(i, names, ent_data, fin_data):
+            try:
+                return await self._generate_batch(i, names, ent_data, fin_data)
+            finally:
+                _on_batch_done()
+
+        async def _tracked_structured(name, meta, ent_data, fin_data):
+            try:
+                return await self._generate_structured(name, meta, ent_data, fin_data)
+            finally:
+                _on_batch_done()
+
         batch_tasks = [
-            self._generate_batch(i, names, enterprise_data, financial_data)
+            _tracked_batch(i, names, enterprise_data, _trim_financial(financial_data, BATCH_FINANCIAL_FILTERS[i]))
             for i, names in enumerate(FIELD_BATCHES)
         ]
         structured_tasks = [
-            self._generate_structured(name, meta, enterprise_data, financial_data)
+            _tracked_structured(name, meta, enterprise_data, {})
             for name, meta in STRUCTURED_FIELDS.items()
         ]
 
         all_tasks = batch_tasks + structured_tasks
-        batch_results = await asyncio.gather(*all_tasks)
+        batch_results = await asyncio.gather(*all_tasks, return_exceptions=True)
 
         # ── 合并结果 ────────────────────────────────────────────
         results: dict[str, str] = {}
@@ -472,7 +505,8 @@ class MinimaxInferenceEngine:
 async def run_inference(
     enterprise_data: dict,
     financial_data: dict,
+    progress_callback: callable = None,
 ) -> dict[str, str]:
-    """执行 Phase 2.6 AI 推理（并行批量版）"""
+    """执行 Phase 2.6 AI 推理（并行批量版），progress_callback(done, total) 在每个批次完成后调用"""
     engine = MinimaxInferenceEngine()
-    return await engine.generate_all_fields(enterprise_data, financial_data)
+    return await engine.generate_all_fields(enterprise_data, financial_data, progress_callback)

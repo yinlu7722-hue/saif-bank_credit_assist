@@ -770,7 +770,21 @@
             line-height: 1.6;
             color: #444;
             white-space: pre-wrap;
+            display: none;
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px dashed #e0e0e0;
         }
+        .debate-content.expanded { display: block; }
+        .debate-toggle {
+            font-size: 12px;
+            color: #2980b9;
+            cursor: pointer;
+            user-select: none;
+            margin-top: 4px;
+            display: inline-block;
+        }
+        .debate-toggle:hover { text-decoration: underline; }
         .debate-position {
             display: inline-block;
             margin-top: 6px;
@@ -1738,20 +1752,13 @@
                         updateStatus(newStatus);
 
                         if (newStatus === 'error') {
-                            document.getElementById('errorMessage').textContent = data.error_message || '未知错误';
+                            const errMsg = data.error_message || (data.phase4_result && data.phase4_result.error) || '未知错误';
+                            document.getElementById('errorMessage').textContent = errMsg;
                             stopPolling();
                         } else if (newStatus === 'reviewing') {
-                            // Committee is running — update committee UI
-                            if (data.phase4_result) {
-                                renderDebateLog(data.phase4_result.debate_log || []);
-                                document.getElementById('committeeStatusText').textContent = data.phase4_result.status || '进行中...';
-                                if (data.phase4_result.status === 'done') {
-                                    stopCommitteePoll();
-                                    document.getElementById('committeeSpinner').style.display = 'none';
-                                    document.getElementById('committeeStatusText').textContent = '贷审会结束';
-                                    renderConclusion(data.phase4_result);
-                                    stopPolling();
-                                }
+                            // Committee poll handles debate rendering; main poll only manages status
+                            if (!committeePollTimer) {
+                                pollCommittee();
                             }
                         } else if (newStatus === 'done') {
                             // Check if committee already ran
@@ -1957,8 +1964,12 @@
 
             try {
                 const sid = getSessionId();
-                const resp = await fetch(`/api/start-committee/${sid}`, { method: 'POST' }).then(r => r.json());
-                if (resp.status === 'reviewing') {
+                const resp = await fetch(`/api/start-committee/${sid}`, { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    throw new Error(data.detail || `HTTP ${resp.status}`);
+                }
+                if (data.status === 'reviewing') {
                     updateStatus(WORKFLOW_STATUS.REVIEWING);
                     startPolling();  // Resume main polling to track committee progress
                 } else {
@@ -1969,7 +1980,8 @@
                 console.error('Start committee error:', e);
                 btn.disabled = false;
                 btn.textContent = '🏛️ 启动模拟贷审会';
-                alert('启动贷审会失败：' + e.message);
+                document.getElementById('errorMessage').textContent = '启动贷审会失败：' + e.message;
+                updateStatus(WORKFLOW_STATUS.ERROR);
             }
         }
 
@@ -2018,8 +2030,12 @@
             const container = document.getElementById('debateContainer');
             let html = '';
             let lastRound = 0;
+            const entryCount = debateLog.length;
 
-            for (const entry of debateLog) {
+            for (let i = 0; i < debateLog.length; i++) {
+                const entry = debateLog[i];
+                const entryId = `debate-${i}`;
+
                 if (entry.round !== lastRound) {
                     lastRound = entry.round;
                     html += `<div style="text-align:center;margin:12px 0;color:#999;font-size:12px;font-weight:600;">—— 第 ${entry.round} 轮 ——</div>`;
@@ -2028,20 +2044,36 @@
                 const colorClass = AGENT_COLORS[entry.speaker] || '';
                 const posClass = POSITION_CLASSES[entry.position?.conclusion] || 'position-unknown';
                 const positionLabel = entry.position?.conclusion || '未明确';
+                const preview = escapeHtml(entry.content).substring(0, 80);
 
                 html += `
                 <div class="debate-entry ${colorClass}">
                     <div class="debate-entry-header">
-                        <span class="debate-speaker" style="color: var(--speaker-color, inherit);">${entry.speaker_name}</span>
+                        <span class="debate-speaker">${entry.speaker_name}</span>
                         <span class="debate-round">第${entry.round}轮</span>
                     </div>
-                    <div class="debate-content">${escapeHtml(entry.content).substring(0, 500)}${entry.content.length > 500 ? '...' : ''}</div>
                     <span class="debate-position ${posClass}">${positionLabel}</span>
+                    <div style="color:#888;font-size:12px;margin-top:4px;">${preview}${entry.content.length > 80 ? '...' : ''}</div>
+                    <span class="debate-toggle" onclick="toggleDebateContent('${entryId}')">▶ 展开全文</span>
+                    <div class="debate-content" id="${entryId}">${escapeHtml(entry.content)}</div>
                 </div>`;
             }
 
             container.innerHTML = html;
             container.scrollTop = container.scrollHeight;
+        }
+
+        function toggleDebateContent(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const toggle = el.previousElementSibling;
+            if (el.classList.contains('expanded')) {
+                el.classList.remove('expanded');
+                if (toggle) toggle.textContent = '▶ 展开全文';
+            } else {
+                el.classList.add('expanded');
+                if (toggle) toggle.textContent = '▼ 收起全文';
+            }
         }
 
         function renderConclusion(result) {

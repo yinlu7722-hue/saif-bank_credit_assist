@@ -21,7 +21,7 @@ from phase2_inference import run_inference
 from shared.utils import safe_print as _safe_print
 
 # 测试文件目录
-TEST_DIR = Path(r"C:\Users\Lawrence\Desktop\MBA\AI课\对公信贷流程智能化任务\testfile-gemini")
+TEST_DIR = Path(r"D:\MBA\AI课\对公信贷流程智能化任务\testfile-gemini")
 # 临时拷贝目录（只取必填文件）
 TEMP_PARSE_DIR = Path(__file__).parent / "temp" / "e2e_test"
 
@@ -38,7 +38,6 @@ async def main():
         "02A2法人身份证.pdf": "A2",
         "06B1财务报表.pdf": "B1",
         "08B3银行流水.pdf": "B2",
-        "09B4纳税申报表.pdf": "B3",
     }
 
     files_copied = 0
@@ -138,7 +137,6 @@ async def main():
             "shareholder_structure": basic_info.get("shareholder_structure", "待提取"),
         },
         financial_data=financial_merged,
-        compliance_data=compliance,
     )
     _safe_print(f"        Inference generated: {len(inference)} fields")
     inference_ok = sum(1 for v in inference.values() if not v.startswith("【生成失败】"))

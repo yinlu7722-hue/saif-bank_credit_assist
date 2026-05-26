@@ -24,9 +24,16 @@ LOG_PATH: Path = OUTPUT_DIR / "phase3.log"
 _tz = timezone(timedelta(hours=8))  # Asia/Shanghai
 
 
+MAX_LOG_BYTES: int = 500 * 1024  # 500KB
+
+
 def _log(msg: str) -> None:
-    """UTF-8 文件日志 — 不写终端，根除 GBK 编码错误"""
+    """UTF-8 文件日志 — 不写终端，根除 GBK 编码错误；超过阈值自动轮转"""
     try:
+        if LOG_PATH.exists() and LOG_PATH.stat().st_size > MAX_LOG_BYTES:
+            bak = LOG_PATH.with_suffix(".log.bak")
+            bak.write_text(LOG_PATH.read_text(encoding="utf-8")[-100000:], encoding="utf-8")
+            LOG_PATH.write_text("", encoding="utf-8")
         ts = datetime.now(_tz).strftime("%H:%M:%S")
         with open(LOG_PATH, "a", encoding="utf-8") as f:
             f.write(f"[{ts}] {msg}\n")

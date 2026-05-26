@@ -26,6 +26,10 @@ MINERU_API_BASE: str = "https://mineru.net/api/v4"
 # Minimax API（Anthropic 兼容协议）
 MINIMAX_API_KEY: str = os.getenv("MINIMAX_API_KEY", "")
 MINIMAX_MODEL: str = os.getenv("MINIMAX_MODEL", "claude-3.5-sonnet-20240620")
+INFERENCE_MAX_CONCURRENT: int = int(os.getenv("INFERENCE_MAX_CONCURRENT", "6"))
+
+# API 访问控制（生产环境必填，开发环境留空跳过认证）
+API_ACCESS_KEY: str = os.getenv("API_ACCESS_KEY", "")
 
 # ─────────────────────────────────────────────
 # 目录配置

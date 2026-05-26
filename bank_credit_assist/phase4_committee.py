@@ -123,21 +123,6 @@ def build_agent_system_prompt(config: dict) -> str:
 请基于你的专业角色发表意见。"""
 
 
-SPEAKER_SELECTOR_SYSTEM_PROMPT = """你是贷审会流程管理者。根据当前的辩论进展，选择下一位发言人。
-
-【选择原则】
-1. 优先选择被上一轮发言人点名的评委
-2. 确保每位评委在本轮至少发言一次
-3. 不要连续选择同一位评委
-4. 当所有评委都已发言且没有新的争论点时，输出 END_ROUND
-5. 牵头审批官每轮最多发言两次（开场引导 + 阶段性总结）
-
-【输出格式】
-输出纯 JSON：{"next_speaker": "<agent_id>", "reason": "选择理由"}
-或结束本轮：{"next_speaker": "END_ROUND", "reason": "所有评委已充分表达"}
-"""
-
-
 # ============================================================================
 # CommitteeAgent 类
 # ============================================================================
@@ -168,9 +153,12 @@ class CommitteeAgent:
             )
             raw_text: str = ""
             for block in response.content:
-                if hasattr(block, "text") and block.text:
-                    raw_text = block.text
+                text = getattr(block, "text", None)
+                if text:
+                    raw_text = text
                     break
+            if not raw_text:
+                return "【发言失败】API 返回为空（可能仅包含 thinking block）"
             return raw_text.strip()
         except Exception as e:
             _safe_print(f"  [ERROR] {self.name} respond failed: {e}")
@@ -248,6 +236,8 @@ class CommitteeOrchestrator:
         income_v = phase2.get("income_verification", {})
 
         def _v(data: dict, *keys, default="待提取"):
+            if data is None or not isinstance(data, dict):
+                return default
             for k in keys:
                 val = data.get(k)
                 if val not in (None, "", 0):
@@ -329,67 +319,43 @@ class CommitteeOrchestrator:
         ]
 
         # 附加科技属性（如有）
-        rd_info = tech.get("rd_expense_ratio", {})
+        rd_info = tech.get("rd_expense_ratio") or {}
         if rd_info and rd_info.get("value"):
-            briefing_parts.insert(5, f"\n### 科技属性\n- 研发费用占比：{rd_info.get('value')}{rd_info.get('unit', '%')}\n- 专利数量：{tech.get('patent_count', '—')}\n- 高新认证：{tech.get('high_tech_cert', {}).get('value', '—')}")
+            high_tech = tech.get("high_tech_cert") or {}
+            briefing_parts.insert(5, f"\n### 科技属性\n- 研发费用占比：{rd_info.get('value')}{rd_info.get('unit', '%')}\n- 专利数量：{tech.get('patent_count', '—')}\n- 高新认证：{high_tech.get('value', '—')}")
 
         return "\n".join(briefing_parts)
 
-    # ── Speaker Selector ───────────────────────────────────────────
+    # ── Speaker Selector（确定性轮转，免除 LLM API 调用）──────────
 
-    async def _select_next_speaker(
+    # 发言优先级：风险 → 行业 → 财务 → 合规 → 牵头
+    _SPEAKER_PRIORITY = ["risk_officer", "industry_officer", "finance_officer", "compliance_officer", "lead_approver"]
+
+    def _select_next_speaker(
         self, round_num: int, spoken_agents: set[str], last_speaker: str,
-        debate_so_far: str, lead_has_spoken: int = 0,
+        lead_has_spoken: int = 0,
     ) -> str:
-        """LLM 驱动的动态发言人选择"""
-        available = []
-        for agent_id, agent in self.agents.items():
-            spoke_count = sum(1 for log in self.debate_log if log.get("round") == round_num and log.get("speaker") == agent_id)
+        """确定性轮转发言人选择 — 零 API 调用，基于优先级 + 轮转"""
+        # 第一优先级：未发言的非牵头评委
+        for agent_id in self._SPEAKER_PRIORITY:
             if agent_id == "lead_approver":
-                if lead_has_spoken >= 2:
-                    continue
-            available.append(f"  - {agent_id} ({agent.name}) — {'已发言' if agent_id in spoken_agents else '未发言'}（本轮已{spoke_count}次）")
+                continue
+            if agent_id not in spoken_agents and agent_id != last_speaker:
+                return agent_id
 
-        selector_prompt = f"""当前是第{round_num}轮辩论。
+        # 第二优先级：未发言的牵头官（每轮可发言 1 次开场 + 可选 1 次总结）
+        if "lead_approver" not in spoken_agents or lead_has_spoken < 2:
+            if last_speaker != "lead_approver" and lead_has_spoken < 2:
+                return "lead_approver"
 
-本轮已发言的评委：{spoken_agents or '无'}
-上一发言人：{last_speaker or '无'}
-牵头审批官本轮已发言{lead_has_spoken}次。
-
-可选评委：
-{chr(10).join(available)}
-
-最近讨论摘要：
-{debate_so_far[-1500:] if len(debate_so_far) > 1500 else debate_so_far}
-
-请选择下一位发言人（或 END_ROUND）。"""
-
-        try:
-            response = await asyncio.to_thread(
-                self.client.messages.create,
-                model=self.model,
-                max_tokens=256,
-                system=SPEAKER_SELECTOR_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": selector_prompt}],
-            )
-            raw_text: str = ""
-            for block in response.content:
-                if hasattr(block, "text") and block.text:
-                    raw_text = block.text
-                    break
-
-            raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text.strip())
-            raw_text = re.sub(r"\s*```$", "", raw_text)
-            result = json.loads(raw_text)
-            return result.get("next_speaker", "END_ROUND")
-
-        except Exception as e:
-            _safe_print(f"  [SpeakerSelector Error] {e}")
-            # 回退：选择第一个未发言的评委
-            for agent_id in self.agents:
-                if agent_id not in spoken_agents and agent_id != "lead_approver":
+        # 第三优先级：所有已发言但非上一发言人的任意评委
+        for agent_id in self._SPEAKER_PRIORITY:
+            if agent_id != last_speaker and agent_id != "lead_approver":
+                spoke_count = sum(1 for log in self.debate_log if log.get("round") == round_num and log.get("speaker") == agent_id)
+                if spoke_count < 2:  # 每位非牵头评委每轮最多 2 次
                     return agent_id
-            return "END_ROUND"
+
+        return "END_ROUND"
 
     # ── Round 实现 ────────────────────────────────────────────────
 
@@ -423,9 +389,13 @@ class CommitteeOrchestrator:
             return agent.agent_id, response, position
 
         tasks = [agent_initial_review(agent) for agent in self.agents.values()]
-        results = await asyncio.gather(*tasks)
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        for agent_id, response, position in results:
+        for item in raw_results:
+            if isinstance(item, Exception):
+                _safe_print(f"  [ROUND1 ERROR] {item}")
+                continue
+            agent_id, response, position = item
             positions[agent_id] = position
             log_entry = {
                 "round": 1,
@@ -470,12 +440,12 @@ class CommitteeOrchestrator:
             on_progress(self.debate_log[-1])
         spoken.add("lead_approver")
         lead_speak_count += 1
-        round_so_far += f"\n\n{lead.name}: {lead_response[:300]}"
+        round_so_far += f"\n\n{lead.name}: {lead_response[:200]}"
 
-        # 动态发言循环（最多6轮）
+        # 动态发言循环（最多4轮 + 提前终止）
         last_speaker = "lead_approver"
-        for _ in range(6):
-            next_id = await self._select_next_speaker(2, spoken, last_speaker, round_so_far, lead_speak_count)
+        for _ in range(4):
+            next_id = self._select_next_speaker(2, spoken, last_speaker, lead_speak_count)
             if next_id == "END_ROUND":
                 break
 
@@ -485,14 +455,19 @@ class CommitteeOrchestrator:
             )
             _safe_print(f"  [{agent.short_name}] 发言...")
             response = await agent.respond(instruction)
-            self._log_speech(2, next_id, agent.name, response, agent.parse_position(response))
+            position = agent.parse_position(response)
+            self._log_speech(2, next_id, agent.name, response, position)
             if on_progress:
                 on_progress(self.debate_log[-1])
             spoken.add(next_id)
             if next_id == "lead_approver":
                 lead_speak_count += 1
             last_speaker = next_id
-            round_so_far += f"\n\n{agent.name}: {response[:400]}"
+            round_so_far += f"\n\n{agent.name}: {response[:200]}"
+
+            if self._consensus_reached(2):
+                _safe_print(f"  [ROUND 2] 共识达成，提前结束本轮")
+                break
 
     async def _run_round_3(self, briefing: str, on_progress: Callable | None) -> None:
         """Round 3: 行业与财务交锋"""
@@ -522,11 +497,11 @@ class CommitteeOrchestrator:
             on_progress(self.debate_log[-1])
         spoken.add("lead_approver")
         lead_speak_count += 1
-        round_so_far = f"{lead.name}: {lead_response[:300]}"
+        round_so_far = f"{lead.name}: {lead_response[:200]}"
 
         last_speaker = "lead_approver"
-        for _ in range(6):
-            next_id = await self._select_next_speaker(3, spoken, last_speaker, round_so_far, lead_speak_count)
+        for _ in range(4):
+            next_id = self._select_next_speaker(3, spoken, last_speaker, lead_speak_count)
             if next_id == "END_ROUND":
                 break
 
@@ -536,14 +511,19 @@ class CommitteeOrchestrator:
             )
             _safe_print(f"  [{agent.short_name}] 发言...")
             response = await agent.respond(instruction)
-            self._log_speech(3, next_id, agent.name, response, agent.parse_position(response))
+            position = agent.parse_position(response)
+            self._log_speech(3, next_id, agent.name, response, position)
             if on_progress:
                 on_progress(self.debate_log[-1])
             spoken.add(next_id)
             if next_id == "lead_approver":
                 lead_speak_count += 1
             last_speaker = next_id
-            round_so_far += f"\n\n{agent.name}: {response[:400]}"
+            round_so_far += f"\n\n{agent.name}: {response[:200]}"
+
+            if self._consensus_reached(3):
+                _safe_print(f"  [ROUND 3] 共识达成，提前结束本轮")
+                break
 
     async def _run_round_4(self, briefing: str, on_progress: Callable | None) -> None:
         """Round 4: 自由辩论"""
@@ -577,11 +557,11 @@ class CommitteeOrchestrator:
             on_progress(self.debate_log[-1])
         spoken.add("lead_approver")
         lead_speak_count += 1
-        round_so_far = f"{lead.name}: {lead_response[:300]}"
+        round_so_far = f"{lead.name}: {lead_response[:200]}"
 
         last_speaker = "lead_approver"
-        for _ in range(7):
-            next_id = await self._select_next_speaker(4, spoken, last_speaker, round_so_far, lead_speak_count)
+        for _ in range(5):
+            next_id = self._select_next_speaker(4, spoken, last_speaker, lead_speak_count)
             if next_id == "END_ROUND":
                 break
 
@@ -591,14 +571,19 @@ class CommitteeOrchestrator:
             )
             _safe_print(f"  [{agent.short_name}] 自由发言...")
             response = await agent.respond(instruction)
-            self._log_speech(4, next_id, agent.name, response, agent.parse_position(response))
+            position = agent.parse_position(response)
+            self._log_speech(4, next_id, agent.name, response, position)
             if on_progress:
                 on_progress(self.debate_log[-1])
             spoken.add(next_id)
             if next_id == "lead_approver":
                 lead_speak_count += 1
             last_speaker = next_id
-            round_so_far += f"\n\n{agent.name}: {response[:400]}"
+            round_so_far += f"\n\n{agent.name}: {response[:200]}"
+
+            if self._consensus_reached(4):
+                _safe_print(f"  [ROUND 4] 共识达成，提前结束本轮")
+                break
 
     async def _run_round_5(self, briefing: str, on_progress: Callable | None) -> dict:
         """Round 5: 牵头审批官终审汇总"""
@@ -676,6 +661,20 @@ class CommitteeOrchestrator:
             "content": content,
             "position": position,
         })
+
+    def _consensus_reached(self, round_num: int) -> bool:
+        """检查当前轮次是否达成共识：连续2位评委'同意'且无'否决'"""
+        round_speeches = [log for log in self.debate_log if log["round"] == round_num]
+        if len(round_speeches) < 2:
+            return False
+        last_two = round_speeches[-2:]
+        conclusions = [s.get("position", {}).get("conclusion", "") for s in last_two]
+        all_agree = all(c in ("同意", "有条件同意") for c in conclusions)
+        any_veto = any(
+            s.get("position", {}).get("conclusion", "") == "否决"
+            for s in round_speeches
+        )
+        return all_agree and not any_veto
 
     def _summarize_positions(self) -> str:
         """汇总初审立场"""
@@ -759,22 +758,27 @@ class CommitteeOrchestrator:
 请保持角色风格，控制在200-400字。"""
 
     def _parse_final_conclusion(self, text: str) -> dict:
-        """解析牵头审批官的终审 JSON"""
+        """解析牵头审批官的终审 JSON（始终返回 dict，永不返回 None）"""
         try:
             cleaned = re.sub(r"^```(?:json)?\s*", "", text.strip())
             cleaned = re.sub(r"\s*```$", "", cleaned)
-            return json.loads(cleaned)
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                return parsed
+            # json.loads 可能返回 None / list / str 等非 dict 类型
+            _safe_print(f"  [WARN] Final conclusion parsed to {type(parsed).__name__}, expected dict")
         except json.JSONDecodeError:
-            _safe_print("  [WARN] Final conclusion JSON parse failed, using fallback")
-            return {
-                "final_conclusion": "需要补充",
-                "core_reasons": ["终审结论解析失败，请查看完整发言"],
-                "risk_warnings": [],
-                "recommended_credit": {},
-                "judge_summary": {},
-                "overall_assessment": text[:300],
-                "raw_response": text,
-            }
+            pass
+        _safe_print("  [WARN] Final conclusion JSON parse failed, using fallback")
+        return {
+            "final_conclusion": "需要补充",
+            "core_reasons": ["终审结论解析失败，请查看完整发言"],
+            "risk_warnings": [],
+            "recommended_credit": {},
+            "judge_summary": {},
+            "overall_assessment": text[:300],
+            "raw_response": text,
+        }
 
     def _compute_position_shifts(self) -> dict[str, dict]:
         """计算评委立场变化"""

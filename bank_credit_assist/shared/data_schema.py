@@ -132,3 +132,50 @@ class FinalReport(BaseModel):
     chapters: list[ReportChapter] = Field(default_factory=list)
     compliance_status: str = Field(description="合规状态：PASS/WARNING/FAIL/REQUIRES_MANUAL")
     manual_verify_items: list[str] = Field(default_factory=list, description="需人工内网核验项")
+
+
+# ============================================================================
+# 统一资料清单（server.py 和 app_streamlit.py 共用）
+# ============================================================================
+
+from enum import Enum
+
+
+class DocumentLevel(str, Enum):
+    REQUIRED = "required"
+    SUGGESTED = "suggested"
+    IF_EXISTS = "if_exists"
+    CONDITIONAL = "conditional"
+
+
+UNIFIED_DOCUMENT_LIST: list[dict] = [
+    # A 类 — 主体资格
+    {"code": "A1", "name": "营业执照（正副本）", "category": "A", "level": "required", "accepted_types": [".pdf", ".jpg", ".jpeg", ".png"], "hint": "最新版，正副本均需"},
+    {"code": "A2", "name": "法定代表人身份证", "category": "A", "level": "required", "accepted_types": [".pdf", ".jpg", ".jpeg", ".png"], "hint": "正反面复印件"},
+    {"code": "A3", "name": "公司章程", "category": "A", "level": "suggested", "accepted_types": [".pdf"], "hint": "最新版"},
+    {"code": "A4", "name": "验资报告", "category": "A", "level": "if_exists", "accepted_types": [".pdf"], "hint": "如有则提供"},
+    {"code": "A5", "name": "股权树状图", "category": "A", "level": "if_exists", "accepted_types": [".pdf", ".jpg", ".jpeg", ".png"], "hint": "向上穿透至最终实际控制人"},
+    # B 类 — 财务资料
+    {"code": "B1", "name": "财务报表（近三年+最新一期）", "category": "B", "level": "required", "accepted_types": [".pdf", ".xlsx", ".xls", ".xlsm"], "hint": "资产负债表、利润表、现金流量表"},
+    {"code": "B2", "name": "银行流水（12个月）", "category": "B", "level": "required", "accepted_types": [".pdf", ".xlsx", ".xls"], "hint": "主要银行账户交易流水"},
+    {"code": "B3", "name": "纳税申报表（近一年）", "category": "B", "level": "suggested", "accepted_types": [".pdf", ".xlsx", ".xls"], "hint": "增值税、企业所得税纳税申报表及完税凭证"},
+    {"code": "B4", "name": "银行授信清单", "category": "B", "level": "suggested", "accepted_types": [".pdf", ".xlsx", ".xls"], "hint": "列明所有尚未结清的融资负债及担保条件"},
+    # C 类 — 经营佐证
+    {"code": "C1", "name": "经营场所证明", "category": "C", "level": "suggested", "accepted_types": [".pdf", ".jpg", ".jpeg", ".png"], "hint": "产权证明或租赁合同+近期租金支付凭证"},
+    {"code": "C2", "name": "上下游交易佐证", "category": "C", "level": "suggested", "accepted_types": [".pdf", ".xlsx", ".xls"], "hint": "前五大供应商/销售商购销数据、合同、发票"},
+    {"code": "C3", "name": "进出口单据", "category": "C", "level": "if_exists", "accepted_types": [".pdf"], "hint": "报关单、海关单据"},
+    {"code": "C4", "name": "在手订单/合同", "category": "C", "level": "suggested", "accepted_types": [".pdf"], "hint": "重大已签署合同及可行性研究报告"},
+    # D 类 — 科技属性
+    {"code": "D1", "name": "高新技术企业证书", "category": "D", "level": "suggested", "accepted_types": [".pdf", ".jpg", ".jpeg", ".png"], "hint": "科技型企业核心资质"},
+    {"code": "D2", "name": "知识产权/专利清单", "category": "D", "level": "suggested", "accepted_types": [".pdf"], "hint": "核心发明专利、实用新型专利、软件著作权"},
+    {"code": "D3", "name": "研发费用明细账", "category": "D", "level": "suggested", "accepted_types": [".pdf", ".xlsx", ".xls"], "hint": "近三年研发费用明细或辅助账册"},
+    {"code": "D4", "name": "核心技术团队履历", "category": "D", "level": "suggested", "accepted_types": [".pdf", ".jpg", ".jpeg", ".png"], "hint": "主要管理层人员详细工作履历"},
+    # G 类 — 担保资料（条件触发）
+    {"code": "G1", "name": "法人担保资料", "category": "G", "level": "conditional", "accepted_types": [".pdf"], "hint": "法人保证人相关材料"},
+    {"code": "G2", "name": "抵质押物资料", "category": "G", "level": "conditional", "accepted_types": [".pdf"], "hint": "抵质押物权属及评估材料"},
+    {"code": "G3", "name": "自然人担保资料", "category": "G", "level": "conditional", "accepted_types": [".pdf"], "hint": "自然人保证人相关材料"},
+]
+
+UNIFIED_REQUIRED_CODES: set[str] = {"A1", "A2", "B1", "B2"}
+UNIFIED_EXCEL_EXTENSIONS: set[str] = {".xls", ".xlsx", ".xlsm"}
+UNIFIED_TEXT_EXTENSIONS: set[str] = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".jpg", ".jpeg", ".png", ".html", ".htm"}

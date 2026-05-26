@@ -69,6 +69,7 @@ class DocxReportBuilder:
     def __init__(self, data: ReportData) -> None:
         self.data = data
         self.doc = Document()
+        self._tables_cache: dict | None = None
 
     # ── 页设置 ─────────────────────────────────────────────────
 
@@ -455,14 +456,16 @@ class DocxReportBuilder:
         self.doc.add_paragraph()  # table 后空行
 
     def _try_extract_table_from_md(self, keywords: list[str]) -> pd.DataFrame | None:
-        """从 MinerU 输出的 Markdown 表格中提取指定报表"""
+        """从 MinerU 输出的 Markdown 表格中提取指定报表（懒加载缓存）"""
         md = self.data.markdown_content
         if not md:
             return None
 
         try:
             from phase2_analysis import _extract_tables_from_markdown
-            tables = _extract_tables_from_markdown(md)
+            if self._tables_cache is None:
+                self._tables_cache = _extract_tables_from_markdown(md)
+            tables = self._tables_cache
             # 按内容匹配（扫描第一列）
             candidates = []
             for name, rows in tables.items():
@@ -625,7 +628,7 @@ class DocxReportBuilder:
         self._add_heading_2("（二）银行融资情况")
         self._add_para(self._get_text("bank_financing"))
         self._add_heading_2("（三）其他融资情况")
-        self._add_para(self._get_text("non_bank_financing_summary"))
+        self._add_para("非银行融资信息未采集。")
 
     def _add_chapter_5(self) -> None:
         """五、行业地位比较分析"""
@@ -644,12 +647,8 @@ class DocxReportBuilder:
     def _add_chapter_6(self) -> None:
         """六、其他重要事项"""
         self._add_heading_1("六、其他重要事项")
-        self._add_heading_2("（一）诉讼情况")
-        self._add_para(self._get_text("litigation_status"))
-        self._add_heading_2("（二）重大负面信息")
-        self._add_para(self._get_text("negative_news"))
-        self._add_heading_2("（三）其他重要事项")
-        self._add_para(self._get_text("other_matters"))
+        self._add_heading_2("（一）诉讼及重大负面信息")
+        self._add_para(self._get_text("litigation_events"))
 
     def _add_chapter_7(self) -> None:
         """七、授信用途及还款来源"""

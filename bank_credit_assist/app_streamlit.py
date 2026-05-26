@@ -27,57 +27,25 @@ from shared.mineru_client import clean_mineru_markdown
 from phase1_parser import phase1_parse_documents, parse_excel_locally
 from phase2_analysis import run_financial_analysis, extract_tech_innovation_metrics
 from phase2_compliance import ComplianceScreener
-from phase3_report import generate_report, FinalReport
+from phase3_report import generate_report
+from shared.data_schema import (
+    UNIFIED_DOCUMENT_LIST,
+    UNIFIED_REQUIRED_CODES,
+    UNIFIED_EXCEL_EXTENSIONS,
+    DocumentLevel,
+)
 
 
 # ============================================================================
 # 资料清单数据结构
 # ============================================================================
 
-class DocumentLevel(str, Enum):
-    REQUIRED = "required"
-    SUGGESTED = "suggested"
-    IF_EXISTS = "if_exists"
+DOCUMENT_LIST = UNIFIED_DOCUMENT_LIST
+REQUIRED_DOCS = UNIFIED_REQUIRED_CODES
+EXCEL_EXTENSIONS = UNIFIED_EXCEL_EXTENSIONS
 
-@dataclass
-class RequiredDocument:
-    code: str
-    name: str
-    category: str
-    level: DocumentLevel
-    accepted_types: list[str]
-    hint: str = ""
-
-DOCUMENT_LIST: list[RequiredDocument] = [
-    # 类别A：基础资质与法务合规类（6项）
-    RequiredDocument("A1", "营业执照（正副本）",     "A", DocumentLevel.REQUIRED,  [".pdf", ".jpg", ".jpeg", ".png"], "最新版，正副本均需"),
-    RequiredDocument("A2", "法定代表人身份证",       "A", DocumentLevel.REQUIRED,  [".pdf", ".jpg", ".jpeg", ".png"], "正反面复印件"),
-    RequiredDocument("A3", "实际控制人身份证",        "A", DocumentLevel.SUGGESTED, [".pdf", ".jpg", ".jpeg", ".png"], "如有实际控制人则必填"),
-    RequiredDocument("A4", "公司章程",                "A", DocumentLevel.SUGGESTED, [".pdf"], "最新版"),
-    RequiredDocument("A5", "验资报告",                "A", DocumentLevel.IF_EXISTS, [".pdf"], "如有则提供"),
-    RequiredDocument("A6", "股权树状图",              "A", DocumentLevel.IF_EXISTS, [".pdf", ".jpg", ".jpeg", ".png"], "向上穿透至最终实际控制人"),
-    
-    # 类别B：财务与税务数据类（4项）
-    RequiredDocument("B1", "财务报表（近三年+最新期）", "B", DocumentLevel.REQUIRED, [".pdf", ".xlsx", ".xls", ".xlsm"], "资产负债表、利润表、现金流量表"),
-    RequiredDocument("B2", "银行流水（12个月）",       "B", DocumentLevel.REQUIRED, [".pdf", ".xlsx", ".xls"], "主要银行账户交易流水"),
-    RequiredDocument("B3", "纳税申报表（近一年）",      "B", DocumentLevel.REQUIRED, [".pdf", ".xlsx", ".xls"], "增值税、企业所得税纳税申报表及完税凭证"),
-    RequiredDocument("B4", "现有负债清单",            "B", DocumentLevel.SUGGESTED, [".pdf", ".xlsx", ".xls"], "列明所有尚未结清的融资负债及担保条件"),
-    
-    # 类别C：经营情况与上下游业务类（4项）
-    RequiredDocument("C1", "经营场所证明",            "C", DocumentLevel.SUGGESTED, [".pdf", ".jpg", ".jpeg", ".png"], "产权证明或租赁合同+近期租金支付凭证"),
-    RequiredDocument("C2", "上下游交易佐证",          "C", DocumentLevel.SUGGESTED, [".pdf", ".xlsx", ".xls"], "前五大供应商/销售商购销数据、合同、发票"),
-    RequiredDocument("C3", "进出口单据",             "C", DocumentLevel.IF_EXISTS, [".pdf"], "报关单、海关单据"),
-    RequiredDocument("C4", "在手订单/合同",           "C", DocumentLevel.SUGGESTED, [".pdf"], "重大已签署合同及可行性研究报告"),
-    
-    # 类别D：科技型企业专属补充资料（4项）
-    RequiredDocument("D1", "高新技术企业证书",         "D", DocumentLevel.SUGGESTED, [".pdf", ".jpg", ".jpeg", ".png"], "科技型企业核心资质"),
-    RequiredDocument("D2", "知识产权/专利清单",        "D", DocumentLevel.SUGGESTED, [".pdf"], "核心发明专利、实用新型专利、软件著作权"),
-    RequiredDocument("D3", "研发费用明细账",          "D", DocumentLevel.SUGGESTED, [".pdf", ".xlsx", ".xls"], "近三年研发费用明细或辅助账册"),
-    RequiredDocument("D4", "核心技术团队履历",         "D", DocumentLevel.SUGGESTED, [".pdf", ".jpg", ".jpeg", ".png"], "主要管理层人员详细工作履历"),
-]
-
-DOCS_BY_CATEGORY: dict[str, list[RequiredDocument]] = {
-    cat: [d for d in DOCUMENT_LIST if d.category == cat]
+DOCS_BY_CATEGORY: dict[str, list[dict]] = {
+    cat: [d for d in DOCUMENT_LIST if d.get("category") == cat]
     for cat in ["A", "B", "C", "D"]
 }
 
@@ -87,10 +55,6 @@ CATEGORY_NAMES: dict[str, str] = {
     "C": "经营情况与上下游业务类",
     "D": "科技型企业专属补充资料",
 }
-
-# 必填项清单
-REQUIRED_DOCS: set[str] = {"A1", "A2", "B1", "B2", "B3"}
-EXCEL_EXTENSIONS: set[str] = {".xls", ".xlsx", ".xlsm"}
 
 WORKFLOW_STATUS_LABELS: dict[str, str] = {
     "idle":        "等待上传资料",
@@ -240,36 +204,64 @@ def run_async(coro):
         loop.close()
 
 async def _run_phase2_async(markdown: str) -> dict:
-    """执行 Phase2：财务分析 + 科技特征提取 + 合规筛查"""
+    """执行 Phase2：完整分析流程（财务 + 科技 + 基本信息 + 计算 + 核验 + 年度指标）"""
+    from phase2_analysis import extract_enterprise_basic_info, run_income_verification, extract_annual_financial_data
+    from phase2_calculator import compute_financial_ratios, merge_extracted_and_computed, compute_annual_indicators_per_year
+
     financial = await run_financial_analysis(markdown)
     tech = await extract_tech_innovation_metrics(markdown)
+    basic_info = await extract_enterprise_basic_info(markdown)
+
+    # 财务指标计算
+    computed_ratios = compute_financial_ratios(financial)
+    financial_merged = merge_extracted_and_computed(financial, computed_ratios)
+
+    # 收入交叉核验
+    income_verification = await run_income_verification(markdown, financial_merged)
+
+    # 年度数据
+    annual_data = extract_annual_financial_data(markdown)
+    annual_indicators = compute_annual_indicators_per_year(annual_data) if annual_data else {}
+
+    # 合规筛查（占位）
     screener = ComplianceScreener()
-    enterprise_data = {
-        "enterprise_name": "待提取",
+    compliance = await screener.run_checks({
+        "enterprise_name": basic_info.get("company_name", "待提取"),
         "verified_markdown": markdown,
-    }
-    compliance = await screener.run_checks(enterprise_data)
+    })
+
     return {
-        "financial": financial,
+        "financial": financial_merged,
         "tech": tech,
+        "basic_info": basic_info,
         "compliance": compliance,
+        "income_verification": income_verification,
+        "annual_indicators": annual_indicators,
     }
 
-async def _run_phase3_async(markdown: str, verified_financial: dict, tech: dict, compliance: dict) -> str:
-    """执行 Phase3：Gemini 报告生成"""
-    enterprise_data = {
-        "enterprise_name": verified_financial.get("enterprise_name", "待提取"),
-        "markdown": markdown,
-    }
+async def _run_phase3_async(markdown: str, verified_financial: dict, tech: dict,
+                             basic_info: dict, income_verification: dict,
+                             annual_indicators: dict) -> str:
+    """执行 Phase3：报告生成（v5.0 从零构建 docx）"""
     output_dir = Path("output")
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"授信审查报告_{int(time.time())}.docx"
-    report: FinalReport = await generate_report(
-        enterprise_data=enterprise_data,
+
+    enterprise_name = (basic_info.get("company_name")
+                       or verified_financial.get("enterprise_name")
+                       or "待提取")
+
+    await generate_report(
+        enterprise_name=enterprise_name,
+        basic_info=basic_info,
         financial_metrics=verified_financial,
-        compliance_results=compliance,
-        template_path=Path("templates/授信调查报告模板.docx"),
+        tech_metrics=tech,
+        inference_text={},
+        income_verification=income_verification,
+        guarantee_types=[],
+        markdown_content=markdown,
         output_path=output_path,
+        annual_indicators=annual_indicators,
     )
     return str(output_path)
 
@@ -370,7 +362,9 @@ def _do_confirm_and_generate():
             markdown=markdown,
             verified_financial=verified_financial,
             tech=phase2.get("tech", {}),
-            compliance=phase2.get("compliance", {}),
+            basic_info=phase2.get("basic_info", {}),
+            income_verification=phase2.get("income_verification", {}),
+            annual_indicators=phase2.get("annual_indicators", {}),
         ))
         st.session_state.report_path = report_path
         st.session_state.workflow_status = "done"
@@ -434,47 +428,48 @@ def _render_idle():
             st.markdown(f'<div class="category-header">{cat}. {CATEGORY_NAMES[cat]} <span style="color:#94A3B8; font-size:14px; font-weight:normal; margin-left:10px;">进度 {completed}/{len(docs)}</span></div>', unsafe_allow_html=True)
             
             for doc in docs:
-                is_upl = has_uploaded(doc.code)
+                doc_code = doc["code"]
+                is_upl = has_uploaded(doc_code)
                 card_cls = "doc-card completed" if is_upl else "doc-card"
-                
-                if doc.level == DocumentLevel.REQUIRED:
+
+                level = doc.get("level", "suggested")
+                if level == "required":
                     badge = '<span class="badge-req">必填</span>'
-                elif doc.level == DocumentLevel.SUGGESTED:
+                elif level == "suggested":
                     badge = '<span class="badge-sug">建议</span>'
                 else:
                     badge = '<span class="badge-opt">如有</span>'
-                
+
                 with st.container():
                     st.markdown(f'<div class="{card_cls}">', unsafe_allow_html=True)
                     c_info, c_upload = st.columns([6, 4])
-                    
+
                     with c_info:
                         st.markdown(f"""
                         <div style="margin-bottom: 4px;">
-                            {badge} <span style="font-weight:600; color:#1E293B; margin-left:6px;">{doc.code} {doc.name}</span>
+                            {badge} <span style="font-weight:600; color:#1E293B; margin-left:6px;">{doc_code} {doc["name"]}</span>
                         </div>
-                        <div style="font-size:12px; color:#64748B;">└ {doc.hint}</div>
+                        <div style="font-size:12px; color:#64748B;">└ {doc.get("hint", "")}</div>
                         """, unsafe_allow_html=True)
-                        
+
                         if is_upl:
-                            for f in get_uploaded(doc.code):
+                            for f in get_uploaded(doc_code):
                                 c_file_name, c_file_del = st.columns([8, 1])
                                 with c_file_name:
                                     st.markdown(f'<div class="uploaded-file-item">✓ {f["name"]}</div>', unsafe_allow_html=True)
-                                # 这里注意 Streamlit 按钮可能会打断 HTML 的连续性，但在 st.columns 中没问题
                                 with c_file_del:
-                                    st.button("✕", key=f"del_{doc.code}_{f['id']}", on_click=_handle_file_delete, args=(doc.code, f["id"]))
-                    
+                                    st.button("✕", key=f"del_{doc_code}_{f['id']}", on_click=_handle_file_delete, args=(doc_code, f["id"]))
+
                     with c_upload:
                         uploaded_file = st.file_uploader(
                             "upload",
-                            type=[t.lstrip(".") for t in doc.accepted_types],
-                            key=f"up_{doc.code}_{len(get_uploaded(doc.code))}",
+                            type=[t.lstrip(".") for t in doc.get("accepted_types", [])],
+                            key=f"up_{doc_code}_{len(get_uploaded(doc_code))}",
                             label_visibility="collapsed",
                             accept_multiple_files=True,
                         )
                         if uploaded_file:
-                            _handle_file_upload(doc.code, uploaded_file)
+                            _handle_file_upload(doc_code, uploaded_file)
                             
                     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -496,7 +491,7 @@ def _render_idle():
             st.markdown(f'<div style="color:#B91C1C; font-size:14px; font-weight:500; margin-bottom:16px;">⚠️ 缺少 {req_total - req_completed} 项必填资料</div>', unsafe_allow_html=True)
             for code in REQUIRED_DOCS:
                 if not has_uploaded(code):
-                    doc_name = next(d.name for d in DOCUMENT_LIST if d.code == code)
+                    doc_name = next(d["name"] for d in DOCUMENT_LIST if d["code"] == code)
                     st.markdown(f'<div style="color:#64748B; font-size:13px; margin-bottom:4px;">- {code} {doc_name}</div>', unsafe_allow_html=True)
         
         st.markdown("<hr style='margin:20px 0;'>", unsafe_allow_html=True)
@@ -512,40 +507,14 @@ def _render_idle():
 # ── 后续状态页 ─────────────────────────────────────────────────────────────
 
 def _render_parsing():
-    st.markdown("### 🔄 正在解析资料")
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-
-    for i in range(100):
-        progress_bar.progress(i + 1)
-        if i < 50:
-            status_text.markdown("⏳ 正在调用 MinerU 解析模型...")
-        else:
-            status_text.markdown("📋 正在整合与清洗多模态数据...")
-        import time
-        time.sleep(0.05)
-
-    st.spinner("MinerU 云端处理中...")
-    _do_start_parsing()
+    st.markdown("### 正在解析资料")
+    with st.spinner("正在调用 MinerU 解析模型处理文件..."):
+        _do_start_parsing()
 
 def _render_analyzing():
-    st.markdown("### 📈 正在执行智能分析与筛查")
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-
-    for i in range(100):
-        progress_bar.progress(i + 1)
-        if i < 30:
-            status_text.markdown("⏳ 正在提取核心财务数据...")
-        elif i < 60:
-            status_text.markdown("🔍 正在筛查企业及个人合规风险...")
-        else:
-            status_text.markdown("🔬 正在提取科技型创新指标...")
-        import time
-        time.sleep(0.05)
-
-    st.spinner("深度分析中...")
-    _do_run_phase2()
+    st.markdown("### 正在执行智能分析与筛查")
+    with st.spinner("正在提取核心财务数据并进行合规筛查..."):
+        _do_run_phase2()
 
 def _render_verifying():
     phase2 = st.session_state.phase2_result
