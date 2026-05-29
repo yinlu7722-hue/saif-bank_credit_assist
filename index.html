@@ -955,6 +955,137 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        /* 批量上传样式 */
+        #batchUploadPanel {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #eee;
+        }
+        .batch-upload-area {
+            border: 2px dashed #bdc3c7;
+            border-radius: 12px;
+            padding: 28px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: #fafbfc;
+        }
+        .batch-upload-area:hover, .batch-upload-area.dragover {
+            border-color: #2980b9;
+            background: #eaf2f8;
+        }
+        .batch-file-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+        .batch-file-item .file-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .batch-file-item .file-size {
+            color: #999;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .classification-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            padding: 12px;
+            margin-bottom: 8px;
+            background: #fafbfc;
+            border-radius: 10px;
+            border: 1px solid #eee;
+            gap: 10px;
+        }
+        .classification-row.low-confidence {
+            border-color: #e74c3c;
+            background: #fef5f5;
+        }
+        .classification-row .cf-name {
+            flex: 1;
+            min-width: 0;
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .classification-row select {
+            padding: 6px 8px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 13px;
+            background: white;
+            min-width: 180px;
+        }
+        .classification-row select:focus {
+            outline: none;
+            border-color: #2980b9;
+            box-shadow: 0 0 0 2px rgba(41,128,185,0.15);
+        }
+        .confidence-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            color: white;
+            white-space: nowrap;
+        }
+        .method-hint {
+            font-size: 11px;
+            color: #999;
+            white-space: nowrap;
+        }
+        .alternatives-hint {
+            font-size: 11px;
+            color: #aaa;
+            padding-left: 24px;
+        }
+        .mode-switch {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .mode-btn {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background: #f8f9fa;
+            cursor: pointer;
+            font-size: 13px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        .mode-btn.active {
+            background: #2980b9;
+            color: white;
+            border-color: #2980b9;
+        }
+        .file-list-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .file-list-title {
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .file-count {
+            font-size: 12px;
+            color: #999;
+        }
     </style>
 </head>
 <body>
@@ -1124,6 +1255,67 @@
                         </div>
                         <div class="progress-bar">
                             <div class="progress-bar-fill" id="suggestedBar" style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- Mode Switch -->
+                    <div class="mode-switch">
+                        <button class="mode-btn active" id="modeSingleBtn" onclick="setBatchMode(false)">📋 单文件模式</button>
+                        <button class="mode-btn" id="modeBatchBtn" onclick="setBatchMode(true)">📦 批量自动归类</button>
+                    </div>
+
+                    <!-- Batch Upload Panel (hidden by default) -->
+                    <div id="batchUploadPanel" style="display: none;">
+                        <div class="batch-upload-area" id="batchDropZone"
+                             ondragover="handleBatchDragOver(event)"
+                             ondragleave="handleBatchDragLeave(event)"
+                             ondrop="handleBatchDrop(event)"
+                             onclick="document.getElementById('batchFileInput').click()">
+                            <div style="font-size: 32px; margin-bottom: 8px;">📦</div>
+                            <div style="font-size: 14px;"><strong>点击选择</strong> 或拖拽文件到此处</div>
+                            <div style="font-size: 12px; color: #999; margin-top: 4px;">支持 PDF、Excel、Word、图片等格式，可一次上传多个文件</div>
+                            <input type="file" id="batchFileInput" multiple
+                                   accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls,.xlsm,.doc,.docx,.pptx,.ppt"
+                                   style="display:none"
+                                   onchange="handleBatchFileSelect(this)">
+                        </div>
+                        <!-- Selected files list -->
+                        <div id="batchFileList" style="display:none; margin-top: 12px;">
+                            <div class="file-list-header">
+                                <span class="file-list-title">已选择 <span id="batchCount">0</span> 个文件</span>
+                                <button class="action-btn secondary" style="padding:6px 12px;font-size:12px;margin-bottom:0;"
+                                        onclick="clearBatchSelection()">清空</button>
+                            </div>
+                            <div id="batchFileItems"></div>
+                            <button class="action-btn primary" id="classifyBtn" onclick="startClassification()" style="margin-top: 8px;">
+                                🔍 批量分类
+                            </button>
+                        </div>
+                        <!-- Classification progress -->
+                        <div id="batchProgressPanel" style="display:none; margin-top: 12px;">
+                            <div class="spinner active">
+                                <div class="spinner-icon">⏳</div>
+                                <div class="spinner-text" id="classifyProgressText">正在解析文件... 0/0</div>
+                            </div>
+                            <div class="progress-bar" style="margin-top: 12px;">
+                                <div class="progress-bar-fill" id="classifyProgressBar" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <!-- Review panel -->
+                        <div id="batchReviewPanel" style="display:none; margin-top: 12px;">
+                            <div class="file-list-header">
+                                <span class="file-list-title">📋 归类审核</span>
+                                <span class="file-count" id="reviewSummary">0 个已归类</span>
+                            </div>
+                            <div id="classificationTable" style="max-height: 420px; overflow-y: auto;"></div>
+                            <div style="display:flex; gap:8px; margin-top: 12px;">
+                                <button class="action-btn secondary" style="flex:1; margin-bottom:0;"
+                                        onclick="resetBatchReview()">↩ 重新选择</button>
+                                <button class="action-btn primary" style="flex:1; margin-bottom:0;"
+                                        id="confirmBatchBtn" onclick="confirmBatchUpload()">
+                                    ✅ 确认上传全部
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -1344,6 +1536,12 @@
         // ========== State ==========
         let currentStatus = WORKFLOW_STATUS.IDLE;
         let uploadedFiles = {}; // { code: [{ name, size, file, id }, ...] }
+
+        // ── 批量上传状态 ──
+        let batchFiles = [];              // [{ file: File, filename: str, size: int }]
+        let batchClassifications = null;  // API /api/classify-files 返回的分类结果
+        let isBatchMode = false;
+        let classifyPollTimer = null;
         let verifiedFinancialData = null;
         let fileIdCounter = 0;
         let pollTimer = null;
@@ -2158,6 +2356,307 @@
         function showError(message) {
             document.getElementById('errorMessage').textContent = message;
             updateStatus(WORKFLOW_STATUS.ERROR);
+        }
+
+        // ========== 批量上传 & 自动归类 ==========
+
+        function setBatchMode(enabled) {
+            isBatchMode = enabled;
+            document.getElementById('modeSingleBtn').className = 'mode-btn' + (enabled ? '' : ' active');
+            document.getElementById('modeBatchBtn').className = 'mode-btn' + (enabled ? ' active' : '');
+            document.getElementById('batchUploadPanel').style.display = enabled ? 'block' : 'none';
+            if (!enabled) {
+                stopClassifyPoll();
+            }
+        }
+
+        // ── 拖放 & 文件选择 ──
+
+        function handleBatchDragOver(e) {
+            e.preventDefault();
+            document.getElementById('batchDropZone').classList.add('dragover');
+        }
+
+        function handleBatchDragLeave(e) {
+            e.preventDefault();
+            document.getElementById('batchDropZone').classList.remove('dragover');
+        }
+
+        function handleBatchDrop(e) {
+            e.preventDefault();
+            document.getElementById('batchDropZone').classList.remove('dragover');
+            addBatchFiles(Array.from(e.dataTransfer.files));
+        }
+
+        function handleBatchFileSelect(input) {
+            if (input.files) {
+                addBatchFiles(Array.from(input.files));
+            }
+            input.value = '';
+        }
+
+        function addBatchFiles(files) {
+            const seen = new Set(batchFiles.map(f => f.filename + '_' + f.size));
+            for (const file of files) {
+                const key = file.name + '_' + file.size;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    batchFiles.push({ file, filename: file.name, size: file.size });
+                }
+            }
+            renderBatchFileList();
+        }
+
+        function renderBatchFileList() {
+            const listDiv = document.getElementById('batchFileList');
+            const itemsDiv = document.getElementById('batchFileItems');
+            const countSpan = document.getElementById('batchCount');
+
+            if (batchFiles.length === 0) {
+                listDiv.style.display = 'none';
+                return;
+            }
+            listDiv.style.display = 'block';
+            countSpan.textContent = batchFiles.length;
+            itemsDiv.innerHTML = batchFiles.map((bf, idx) => `
+                <div class="batch-file-item">
+                    <span>${getFileIcon(bf.filename)}</span>
+                    <span class="file-name">${escapeHtml(bf.filename)}</span>
+                    <span class="file-size">${formatSize(bf.size)}</span>
+                    <button class="doc-file-delete" onclick="removeBatchFile(${idx})" style="padding:0 6px;font-size:14px;">✕</button>
+                </div>
+            `).join('');
+        }
+
+        function removeBatchFile(idx) {
+            batchFiles.splice(idx, 1);
+            renderBatchFileList();
+            if (batchClassifications) resetBatchReview();
+        }
+
+        function clearBatchSelection() {
+            batchFiles = [];
+            batchClassifications = null;
+            stopClassifyPoll();
+            renderBatchFileList();
+            document.getElementById('batchReviewPanel').style.display = 'none';
+            document.getElementById('batchProgressPanel').style.display = 'none';
+            document.getElementById('batchFileList').style.display = 'none';
+        }
+
+        function resetBatchReview() {
+            batchClassifications = null;
+            stopClassifyPoll();
+            document.getElementById('batchReviewPanel').style.display = 'none';
+            document.getElementById('batchProgressPanel').style.display = 'none';
+            document.getElementById('batchFileList').style.display = 'block';
+            document.getElementById('classifyBtn').disabled = false;
+            document.getElementById('classifyBtn').textContent = '🔍 批量分类';
+        }
+
+        // ── 分类 ──
+
+        async function startClassification() {
+            if (batchFiles.length === 0) return;
+            const btn = document.getElementById('classifyBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ 上传文件中...';
+
+            try {
+                const sid = getSessionId();
+                const formData = new FormData();
+                formData.append('session_id', sid);
+                for (const bf of batchFiles) {
+                    formData.append('files', bf.file, bf.filename);
+                }
+                const initResult = await apiPost('/api/classify-files', formData);
+
+                if (initResult.status === 'classifying') {
+                    // 显示进度面板，开始轮询
+                    document.getElementById('batchFileList').style.display = 'none';
+                    document.getElementById('batchProgressPanel').style.display = 'block';
+                    document.getElementById('classifyProgressText').textContent =
+                        `正在解析文件... 0/${initResult.total}`;
+
+                    classifyPollTimer = setInterval(pollClassifyProgress, 2000);
+                }
+            } catch (err) {
+                showError('归类启动失败: ' + err.message);
+                btn.disabled = false;
+                btn.textContent = '🔍 批量分类';
+            }
+        }
+
+        async function pollClassifyProgress() {
+            try {
+                const status = await apiGet(`/api/status/${getSessionId()}`);
+                const cs = status.classify_status;
+                const cp = status.classify_progress || {};
+                const bar = document.getElementById('classifyProgressBar');
+                const text = document.getElementById('classifyProgressText');
+
+                if (cs === 'parsing') {
+                    const done = cp.completed || 0;
+                    const total = cp.total || 0;
+                    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+                    bar.style.width = pct + '%';
+                    text.textContent = `正在解析文件... ${done}/${total}`;
+                } else if (cs === 'classifying') {
+                    bar.style.width = '95%';
+                    text.textContent = 'AI 正在分析文件类型...';
+                } else if (cs === 'done' && status.classify_result) {
+                    stopClassifyPoll();
+                    bar.style.width = '100%';
+                    text.textContent = '解析完成！';
+                    batchClassifications = status.classify_result;
+                    setTimeout(() => {
+                        document.getElementById('batchProgressPanel').style.display = 'none';
+                        renderClassificationResults(status.classify_result);
+                        document.getElementById('batchReviewPanel').style.display = 'block';
+                    }, 500);
+                } else if (cs === 'error') {
+                    stopClassifyPoll();
+                    text.textContent = '解析失败: ' + (status.error_message || '未知错误');
+                }
+            } catch (err) {
+                // 静默重试
+            }
+        }
+
+        function stopClassifyPoll() {
+            if (classifyPollTimer) {
+                clearInterval(classifyPollTimer);
+                classifyPollTimer = null;
+            }
+        }
+
+        function renderClassificationResults(classifications) {
+            const container = document.getElementById('classificationTable');
+            const summary = document.getElementById('reviewSummary');
+            const list = classifications || [];
+            const classified = list.filter(c => c.confidence !== 'low').length;
+            const uncertain = list.filter(c => c.confidence === 'low').length;
+
+            summary.textContent = `${list.length} 个文件, ${classified} 个已归类, ${uncertain} 个待确认`;
+
+            container.innerHTML = list.map(c => {
+                const confLabel = getConfLabel(c.confidence);
+                const confColor = getConfColor(c.confidence);
+                const methodLabel = getMtdLabel(c.method);
+                const lowClass = c.confidence === 'low' ? ' low-confidence' : '';
+                const altStr = c.all_scores && Object.keys(c.all_scores).length > 0
+                    ? Object.entries(c.all_scores).map(([code, score]) => `[${code}] ${Math.round(score * 100)}%`).join(', ')
+                    : '';
+
+                return `
+                    <div class="classification-row${lowClass}">
+                        <span>${getFileIcon(c.filename)}</span>
+                        <span class="cf-name" title="${escapeHtml(c.filename)}">${escapeHtml(c.filename)}</span>
+                        <span class="confidence-tag" style="background:${confColor};">${confLabel}</span>
+                        <select class="cf-select" data-filename="${escapeHtml(c.filename)}">
+                            ${buildCategoryOptions(c.suggested_code)}
+                        </select>
+                        <span class="method-hint">${methodLabel}</span>
+                        ${altStr ? `<div style="width:100%;" class="alternatives-hint">备选: ${escapeHtml(altStr)}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function buildCategoryOptions(selectedCode) {
+            const groups = {};
+            DOCUMENT_CATEGORIES.forEach(cat => {
+                cat.documents.forEach(doc => {
+                    if (!groups[cat.category]) groups[cat.category] = [];
+                    groups[cat.category].push(doc);
+                });
+            });
+            groups['G'] = GUARANTEE_CATEGORIES.map(g => ({ code: g.code, name: g.name }));
+
+            let html = '<option value="">-- 未归类 --</option>';
+            for (const [cat, docs] of Object.entries(groups)) {
+                html += `<optgroup label="类别${cat}">`;
+                docs.forEach(doc => {
+                    const sel = doc.code === selectedCode ? ' selected' : '';
+                    html += `<option value="${doc.code}"${sel}>[${doc.code}] ${doc.name}</option>`;
+                });
+                html += '</optgroup>';
+            }
+            return html;
+        }
+
+        function getConfLabel(conf) {
+            return { high: '高置信度', medium: '中置信度', low: '待确认' }[conf] || conf;
+        }
+
+        function getConfColor(conf) {
+            return { high: '#27ae60', medium: '#f39c12', low: '#e74c3c' }[conf] || '#999';
+        }
+
+        function getMtdLabel(method) {
+            return { rule_filename: '关键词匹配', llm_content: 'AI内容识别' }[method] || method || '';
+        }
+
+        // ── 确认上传 ──
+
+        async function confirmBatchUpload() {
+            const btn = document.getElementById('confirmBatchBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ 上传中...';
+
+            const overrides = [];
+            document.querySelectorAll('.cf-select').forEach(select => {
+                const filename = select.dataset.filename;
+                const docCode = select.value;
+                if (docCode) {
+                    overrides.push({ filename, doc_code: docCode });
+                }
+            });
+
+            if (overrides.length === 0) {
+                showError('请为至少一个文件选择分类后再确认');
+                btn.disabled = false;
+                btn.textContent = '✅ 确认上传全部';
+                return;
+            }
+
+            try {
+                const sid = getSessionId();
+                const formData = new FormData();
+                formData.append('session_id', sid);
+                formData.append('classifications', JSON.stringify(overrides));
+                const result = await apiPost('/api/batch-upload', formData);
+
+                // 更新本地 uploadedFiles
+                for (const item of result.uploaded) {
+                    const code = item.doc_code;
+                    if (!uploadedFiles[code]) uploadedFiles[code] = [];
+                    uploadedFiles[code].push({
+                        id: item.id,
+                        name: item.name,
+                        size: 0,
+                        file: null,
+                    });
+                }
+
+                // 切回单文件模式并刷新
+                setBatchMode(false);
+                batchFiles = [];
+                batchClassifications = null;
+                renderDocumentList();
+                updateProgress();
+
+                let msg = `✅ 成功上传 ${result.success_count} 个文件`;
+                if (result.error_count > 0) {
+                    msg += `，${result.error_count} 个失败`;
+                }
+                showStatus(msg, result.error_count > 0 ? 'error' : 'success');
+            } catch (err) {
+                showError('批量上传失败: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '✅ 确认上传全部';
+            }
         }
     </script>
 </body>

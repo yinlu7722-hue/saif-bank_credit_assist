@@ -32,13 +32,15 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from shared.config import API_ACCESS_KEY
 
-from phase1_parser import phase1_parse_documents
+from phase1_parser import phase1_parse_documents, EXCEL_EXTENSIONS as _EXCEL_EXT, MINERU_EXTENSIONS as _MINERU_EXT
 from phase2_analysis import run_financial_analysis, extract_tech_innovation_metrics
 from phase2_analysis import extract_enterprise_basic_info
 from phase2_calculator import compute_financial_ratios, merge_extracted_and_computed
 from phase2_inference import run_inference
 from phase3_report import generate_report
 from phase4_committee import run_committee
+from file_classifier import FileClassifier, ClassificationResult
+from shared.mineru_client import extract_batch_cloud, FileProgress, FileProcessingState
 from shared.config import PROJECT_ROOT, OUTPUT_DIR
 from shared.data_schema import (
     UNIFIED_DOCUMENT_LIST as DOCUMENT_LIST,
@@ -47,6 +49,8 @@ from shared.data_schema import (
     UNIFIED_TEXT_EXTENSIONS as SUPPORTED_TEXT_EXTENSIONS,
 )
 from shared.utils import safe_print as _safe_print
+
+import pandas as pd
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -107,6 +111,13 @@ class SessionState:
         self.committee_running: bool = False
         self.temp_dir: Path = PROJECT_ROOT / "temp" / str(uuid.uuid4())
         self.temp_dir.mkdir(parents=True, exist_ok=True)
+        # 批量分类相关
+        self.mineru_cache: dict[str, str] = {}  # {filename: markdown} MinerU 预解析缓存
+        self.batch_classified: bool = False
+        self.classify_status: str = "idle"  # idle / parsing / classifying / done
+        self.classify_progress: dict = {"completed": 0, "total": 0, "files": []}
+        self.classify_result: list[dict] | None = None
+        self._pending_mineru_cache: dict[str, str] = {}
 
     def get_next_file_id(self) -> int:
         self.file_id_counter += 1
@@ -287,6 +298,9 @@ async def get_status(session_id: str):
         "phase3_progress": state.phase3_progress,
         "phase4_result": state.phase4_result,
         "committee_running": state.committee_running,
+        "classify_status": state.classify_status,
+        "classify_progress": state.classify_progress,
+        "classify_result": state.classify_result,
     }
 
 
@@ -408,13 +422,264 @@ async def reset_workflow(session_id: str = Form(...)):
 
 
 # ============================================================================
+# 批量分类端点
+# ============================================================================
+
+@app.post("/api/classify-files")
+async def classify_files(
+    session_id: str = Form(...),
+    files: list[UploadFile] = File(...),
+):
+    """批量上传文件，通过 MinerU 预解析 + 规则/LLM 自动分类"""
+    state = get_session(session_id)
+
+    if not files:
+        raise HTTPException(400, "No files provided")
+
+    classify_dir = state.temp_dir / "_classify_temp"
+    classify_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_files: list[dict] = []
+    for file in files:
+        if not file.filename:
+            continue
+        safe_name = _sanitize_filename(file.filename)
+        save_path = classify_dir / safe_name
+        content = await file.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+        saved_files.append({"filename": file.filename, "safe_name": safe_name, "path": str(save_path)})
+
+    if not saved_files:
+        raise HTTPException(400, "No valid files")
+
+    state.classify_status = "parsing"
+    state.classify_progress = {"completed": 0, "total": len(saved_files), "files": []}
+    state.classify_result = None
+
+    asyncio.create_task(_run_classification(state, saved_files, classify_dir))
+
+    return {"status": "classifying", "total": len(saved_files)}
+
+
+async def _run_classification(state: SessionState, saved_files: list[dict], classify_dir: Path) -> None:
+    """后台执行 MinerU 预解析 + 文件分类"""
+    try:
+        # 分流文件
+        mineru_paths: list[Path] = []
+        excel_files: list[dict] = []
+        skipped: list[dict] = []
+
+        for f in saved_files:
+            ext = Path(f["filename"]).suffix.lower()
+            path = Path(f["path"])
+            if ext in _EXCEL_EXT:
+                excel_files.append(f)
+            elif ext in _MINERU_EXT:
+                mineru_paths.append(path)
+            else:
+                skipped.append(f)
+
+        parsed_results: dict[str, str] = {}
+
+        # 进度回调
+        file_states: dict[str, dict] = {
+            f["filename"]: {"state": "pending", "percent": 0}
+            for f in saved_files
+        }
+
+        async def on_progress(fp: FileProgress) -> None:
+            if fp.filename in file_states:
+                file_states[fp.filename] = {"state": fp.state.value, "percent": fp.progress_percent}
+            # 更新总体进度
+            done = sum(1 for v in file_states.values() if v["state"] in ("done", "failed"))
+            state.classify_progress = {
+                "completed": done,
+                "total": len(saved_files),
+                "files": [
+                    {"filename": fn, "state": fs["state"], "percent": fs["percent"]}
+                    for fn, fs in file_states.items()
+                ],
+            }
+
+        # 本地解析 Excel
+        for f in excel_files:
+            try:
+                md = await _parse_excel_to_md(Path(f["path"]))
+                parsed_results[f["filename"]] = md
+                file_states[f["filename"]] = {"state": "done", "percent": 100}
+            except Exception as e:
+                _safe_print(f"[Classify] Excel parse failed for {f['filename']}: {e}")
+                file_states[f["filename"]] = {"state": "failed", "percent": 0}
+
+        # MinerU 批量解析
+        if mineru_paths:
+            _safe_print(f"[Classify] Sending {len(mineru_paths)} files to MinerU...")
+            try:
+                mineru_results = await extract_batch_cloud(
+                    mineru_paths,
+                    progress_callback=on_progress,
+                )
+                for f in saved_files:
+                    fname = f["filename"]
+                    if fname in mineru_results and mineru_results[fname]:
+                        parsed_results[fname] = mineru_results[fname]
+                        file_states[fname] = {"state": "done", "percent": 100}
+                    elif fname not in parsed_results:
+                        file_states[fname] = {"state": "failed", "percent": 0}
+            except Exception as e:
+                _safe_print(f"[Classify] MinerU batch failed: {e}")
+
+        # 对跳过的不支持格式，仍可基于文件名分类
+        for f in skipped:
+            file_states[f["filename"]] = {"state": "done", "percent": 100}
+
+        # 更新进度
+        state.classify_progress = {
+            "completed": len(saved_files),
+            "total": len(saved_files),
+            "files": [
+                {"filename": fn, "state": fs["state"], "percent": fs["percent"]}
+                for fn, fs in file_states.items()
+            ],
+        }
+
+        # 分类
+        state.classify_status = "classifying"
+        classifier = FileClassifier(use_llm=True)
+        results = await classifier.classify_batch(parsed_results)
+
+        state.classify_result = [
+            {
+                "filename": r.filename,
+                "suggested_code": r.suggested_code,
+                "suggested_name": r.suggested_name,
+                "confidence": r.confidence,
+                "method": r.method,
+                "all_scores": r.all_scores,
+                "error": r.error,
+            }
+            for r in results
+        ]
+        state.classify_status = "done"
+        # 缓存 MinerU 结果到 session（后续 batch-upload 确认后激活）
+        state._pending_mineru_cache = parsed_results
+
+        _safe_print(f"[Classify] Done: {len(results)} files classified")
+
+    except Exception as e:
+        _safe_print(f"[Classify] Error: {e}")
+        _safe_print(traceback.format_exc())
+        state.classify_status = "error"
+        state.error_message = _safe_error(e)
+
+
+async def _parse_excel_to_md(path: Path) -> str:
+    """本地 pandas 解析 Excel → Markdown（轻量版，仅用于分类）"""
+    all_sheets: list[str] = []
+    xl = pd.ExcelFile(path)
+    for sheet_name in xl.sheet_names[:3]:  # 最多 3 个 sheet
+        df = pd.read_excel(xl, sheet_name=sheet_name)
+        md_table = df.to_markdown(index=False)
+        all_sheets.append(f"### {sheet_name}\n{md_table}")
+    return "\n\n".join(all_sheets)
+
+
+@app.post("/api/batch-upload")
+async def batch_upload(
+    session_id: str = Form(...),
+    classifications: str = Form(...),
+):
+    """确认批量上传：将分类后的文件注册到对应 doc_code"""
+    import json
+
+    try:
+        confirmed = json.loads(classifications)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "Invalid classifications JSON")
+
+    if not isinstance(confirmed, list):
+        raise HTTPException(400, "classifications must be a JSON array")
+
+    state = get_session(session_id)
+    classify_dir = state.temp_dir / "_classify_temp"
+    valid_codes = {doc["code"] for doc in DOCUMENT_LIST}
+
+    uploaded = []
+    errors = []
+
+    for item in confirmed:
+        filename = item.get("filename")
+        doc_code = item.get("doc_code")
+
+        if not filename or not doc_code:
+            errors.append({"filename": filename, "error": "Missing filename or doc_code"})
+            continue
+
+        if doc_code not in valid_codes:
+            errors.append({"filename": filename, "error": f"Invalid doc_code: {doc_code}"})
+            continue
+
+        # 查找源文件
+        safe_name = _sanitize_filename(filename)
+        src = classify_dir / safe_name
+
+        if not src.exists():
+            errors.append({"filename": filename, "error": "File not found in temp storage"})
+            continue
+
+        # 注册到 session
+        if doc_code not in state.uploaded_files:
+            state.uploaded_files[doc_code] = []
+
+        existing_names = {f["name"] for f in state.uploaded_files[doc_code]}
+        if filename in existing_names:
+            errors.append({"filename": filename, "error": f"Already exists in {doc_code}"})
+            continue
+
+        file_id = state.get_next_file_id()
+        dst = state.temp_dir / f"{doc_code}_{file_id}_{safe_name}"
+        shutil.move(str(src), str(dst))
+
+        state.uploaded_files[doc_code].append({
+            "id": file_id,
+            "name": safe_name,
+            "path": str(dst),
+        })
+        uploaded.append({"id": file_id, "name": filename, "doc_code": doc_code})
+
+    # 激活 MinerU 缓存
+    if state._pending_mineru_cache and uploaded:
+        state.mineru_cache = {
+            item["name"]: state._pending_mineru_cache.get(item["name"], "")
+            for item in uploaded
+            if item["name"] in state._pending_mineru_cache
+        }
+        state.batch_classified = True
+
+    # 清理
+    state._pending_mineru_cache = {}
+    try:
+        shutil.rmtree(classify_dir, ignore_errors=True)
+    except Exception:
+        pass
+
+    return {
+        "uploaded": uploaded,
+        "errors": errors,
+        "total": len(confirmed),
+        "success_count": len(uploaded),
+        "error_count": len(errors),
+    }
+
+
+# ============================================================================
 # 后台任务
 # ============================================================================
 
 async def _run_phase1(state: SessionState) -> None:
     """后台执行 Phase1 解析 + 自动链式启动 Phase2"""
     try:
-        # 将所有已上传文件复制到解析目录
         parse_dir = state.temp_dir / "parse_input"
         parse_dir.mkdir(exist_ok=True)
 
@@ -425,7 +690,11 @@ async def _run_phase1(state: SessionState) -> None:
                     dst = parse_dir / f["name"]
                     shutil.copy2(src, dst)
 
-        result = await phase1_parse_documents(parse_dir)
+        # ── 检查 MinerU 缓存（批量分类模式）──
+        if state.batch_classified and state.mineru_cache:
+            result = await _reuse_mineru_cache(state, parse_dir)
+        else:
+            result = await phase1_parse_documents(parse_dir)
 
         combined = []
         for fname, content in result["contents"].items():
@@ -445,6 +714,45 @@ async def _run_phase1(state: SessionState) -> None:
     except Exception as e:
         state.error_message = _safe_error(e)
         state.workflow_status = "error"
+
+
+async def _reuse_mineru_cache(state: SessionState, parse_dir: Path) -> dict:
+    """复用 MinerU 缓存结果，仅对缓存未命中的文件重新解析"""
+    import os as _os
+
+    all_files = [parse_dir / f for f in _os.listdir(str(parse_dir)) if (parse_dir / f).is_file()]
+    results: dict[str, str] = {}
+    uncached_excel: list[Path] = []
+    uncached_mineru: list[Path] = []
+
+    for fp in all_files:
+        fname = fp.name
+        if fname in state.mineru_cache and state.mineru_cache[fname]:
+            results[fname] = state.mineru_cache[fname]
+            _safe_print(f"[Phase1] Reusing cached: {fname}")
+        elif fp.suffix.lower() in _EXCEL_EXT:
+            uncached_excel.append(fp)
+        elif fp.suffix.lower() in _MINERU_EXT:
+            uncached_mineru.append(fp)
+
+    # 本地解析未缓存的 Excel
+    for fp in uncached_excel:
+        try:
+            md = await _parse_excel_to_md(fp)
+            results[fp.name] = md
+            _safe_print(f"[Phase1] Local Excel: {fp.name}")
+        except Exception as e:
+            _safe_print(f"[Phase1] Excel failed: {fp.name}: {e}")
+
+    # MinerU 解析未缓存的文件（兜底，理论上不应发生）
+    if uncached_mineru:
+        _safe_print(f"[Phase1] MinerU fallback for {len(uncached_mineru)} uncached files")
+        mineru_results = await extract_batch_cloud(uncached_mineru)
+        results.update(mineru_results)
+
+    all_names = {fp.name for fp in all_files}
+    failed_files = [fn for fn in all_names if fn not in results or not results.get(fn)]
+    return {"contents": results, "failed_files": failed_files}
 
 
 async def _run_phase2(state: SessionState) -> None:

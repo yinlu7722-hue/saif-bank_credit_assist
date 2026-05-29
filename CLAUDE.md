@@ -63,3 +63,15 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+# 语言设置
+
+全局使用**简体中文**进行交流。包括但不限于：
+- 所有回复和说明
+- 方案设计和计划文档
+- 流程描述和步骤说明
+- 代码注释（如有必要）
+- 任务列表和进度更新
+- 问题分析和错误报告
+
+代码标识符（变量名、函数名、类名等）保持英文不变。
